@@ -1,0 +1,12 @@
+{
+  "name": "taxax-legal-hosted-example",
+  "url": "https://legal.example.invalid/mcp",
+  "transport": "streamable-http",
+  "authentication": {
+    "type": "bearer-jwt",
+    "issuer": "https://issuer.example.invalid",
+    "audience": "taxax-legal",
+    "required_scope": "legal.read"
+  },
+  "notice": "예시 placeholder입니다. 실제 IdP, DNS, TLS, client 등록은 운영자가 별도로 구성합니다."
+}

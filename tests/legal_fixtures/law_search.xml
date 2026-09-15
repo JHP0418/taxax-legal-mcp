@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LawSearch>
+  <totalCnt>1</totalCnt>
+  <page>1</page>
+  <law>
+    <법령ID>000123</법령ID>
+    <법령일련번호>12345</법령일련번호>
+    <법령명한글>법인세법</법령명한글>
+    <공포일자>20260101</공포일자>
+    <시행일자>20260102</시행일자>
+  </law>
+</LawSearch>

@@ -1,0 +1,33 @@
+{
+  "data": {
+    "ASEISA001MR01": {
+      "searchResultVO": {
+        "collectionList": [
+          {
+            "nameEn": "question",
+            "totalCount": "2",
+            "resultList": [
+              {
+                "DOC_ID": "NTS001",
+                "TTL": "대손금 손금산입 질의회신",
+                "DCM_RGT_DTM_S": "2026-03-15",
+                "GIST_CNTN": "회수불능이 객관적으로 확정된 경우를 검토한다.",
+                "NTST_DCM_CL_NM": "서면질의",
+                "NTST_TLAW_CL_NM": "법인세",
+                "NTST_FLE_ID": "FILE001"
+              },
+              {
+                "DOC_ID": "NTS002",
+                "TTL": "부가가치세 공급시기 질의회신",
+                "DCM_RGT_DTM_S": "2024-08-01",
+                "GIST_CNTN": "용역 공급시기를 사실관계별로 판단한다.",
+                "NTST_DCM_CL_NM": "사전답변",
+                "NTST_TLAW_CL_NM": "부가가치세"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

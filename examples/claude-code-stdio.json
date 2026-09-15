@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "taxax-legal": {
+      "type": "stdio",
+      "command": "taxax-legal-mcp",
+      "args": ["--transport", "stdio"],
+      "env": {
+        "TAXAX_LEGAL_DATA_DIR": "C:/replace-with-user-data/taxax-legal"
+      }
+    }
+  }
+}

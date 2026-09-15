@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=77,<82"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "taxax-legal-mcp"
+version = "0.2.8"
+description = "Deterministic Korean tax-law research service and MCP server"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+  "mcp>=2.2,<3",
+  "pydantic>=2.12,<3",
+  "PyJWT[crypto]>=2.13,<3",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+
+[project.optional-dependencies]
+dev = ["build>=1.2,<2"]
+windows = ["pyinstaller>=6.11,<7"]
+
+[project.scripts]
+taxax-legal = "taxax.legal.cli:main"
+taxax-legal-mcp = "taxax.mcp.server:main"
+taxax-legal-setup = "taxax.legal.windows_setup:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["taxax.legal", "taxax.legal.providers", "taxax.mcp"]
+include-package-data = false

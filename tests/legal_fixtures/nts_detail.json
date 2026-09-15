@@ -1,0 +1,18 @@
+{
+  "data": {
+    "ASIQTB002PR01": {
+      "dcmDVO": {
+        "ntstDcmId": "NTS001",
+        "ntstDcmTtl": "대손금 손금산입 질의회신",
+        "dcmRgtDtm": "20260315",
+        "explYd": "20260310",
+        "ntstTlawClNm": "법인세",
+        "ntstFleId": "FILE001",
+        "ntstDcmGistCntn": "채권 회수를 위한 절차를 진행하였다.",
+        "ntstDcmCntn": "객관적인 회수불능 사유를 확인해야 한다. 법인세법상 대손 요건과 사실관계를 함께 검토한다.",
+        "ntstDcmRplyCntn": null,
+        "ntstDcmMatrCntn": "법인세법 및 같은 법 시행령"
+      }
+    }
+  }
+}

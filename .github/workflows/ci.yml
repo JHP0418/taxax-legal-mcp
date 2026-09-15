@@ -1,0 +1,80 @@
+name: legal-package
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install development dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+        shell: bash
+      - name: Compile legal packages
+        run: python -m compileall -q src/taxax/legal src/taxax/mcp
+      - name: Run legal tests
+        run: python -m unittest discover -s tests -p "test_legal_*.py" -v
+      - name: Build wheel and sdist
+        run: python -m build --outdir package-dist
+      - name: Validate distribution allowlist
+        run: python scripts/validate_legal_distribution.py package-dist
+      - name: Smoke clean wheel install
+        run: python scripts/smoke_legal_install.py package-dist
+      - name: Export physical public subset
+        run: python scripts/export_legal_public.py "${RUNNER_TEMP}/taxax-legal-public"
+        shell: bash
+      - name: Build and validate public subset
+        run: |
+          python -m build --outdir "${RUNNER_TEMP}/taxax-legal-public-dist" "${RUNNER_TEMP}/taxax-legal-public"
+          python "${RUNNER_TEMP}/taxax-legal-public/scripts/validate_legal_distribution.py" "${RUNNER_TEMP}/taxax-legal-public-dist"
+        shell: bash
+      - name: Build container image
+        if: runner.os == 'Linux' && matrix.python == '3.11'
+        run: docker build -t taxax-legal-mcp:ci .
+      - name: Smoke container CLI
+        if: runner.os == 'Linux' && matrix.python == '3.11'
+        run: |
+          docker run --rm --entrypoint taxax-legal taxax-legal-mcp:ci doctor
+          docker run --rm --entrypoint taxax-legal taxax-legal-mcp:ci demo
+
+  windows-installer:
+    runs-on: windows-latest
+    env:
+      # runner 컨텍스트는 job 레벨 env에서 쓸 수 없다. 여기에 두면 GitHub이
+      # 워크플로 파일 전체를 무효로 판단해 어떤 job도 실행하지 않는다.
+      # 경로는 step 안에서 $env:RUNNER_TEMP(실행 시 주어지는 환경변수)로 만든다.
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install Windows build dependencies
+        run: python -m pip install --upgrade pip; python -m pip install -e ".[dev,windows]"
+      - name: Build Windows installer bundle
+        run: python scripts/build_windows_installer.py "$env:RUNNER_TEMP\taxax-legal-windows"
+      - name: Smoke frozen setup, CLI, and MCP
+        run: python scripts/smoke_windows_executables.py "$env:RUNNER_TEMP\taxax-legal-windows"
+      - name: Upload unsigned Windows bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: taxax-legal-windows-unsigned
+          path: ${{ runner.temp }}\taxax-legal-windows
+          if-no-files-found: error

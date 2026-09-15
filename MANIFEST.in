@@ -1,0 +1,27 @@
+include .env.example
+include .gitignore
+include CHANGELOG.md
+include Dockerfile
+include LICENSE
+include PUBLIC_ALLOWLIST.md
+include README.md
+include THIRD_PARTY_NOTICES.md
+include compose.yaml
+include pyproject.toml
+include requirements.lock
+include .github/workflows/ci.yml
+include docs/legal-mcp-deployment.md
+include examples/claude-code-stdio.json
+include examples/hosted-mcp.json
+include scripts/build_windows_installer.py
+include scripts/export_legal_public.py
+include scripts/smoke_legal_install.py
+include scripts/smoke_windows_executables.py
+include scripts/validate_legal_distribution.py
+recursive-include src/taxax/legal *.py
+recursive-include src/taxax/mcp *.py
+prune tests
+include tests/test_legal_*.py
+recursive-include tests/legal_fixtures *
+global-exclude __pycache__
+global-exclude *.py[cod]

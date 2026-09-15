@@ -1,0 +1,36 @@
+services:
+  legal-mcp:
+    build:
+      context: .
+    command: ["--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8765"]
+    ports:
+      - "127.0.0.1:8765:8765"
+    environment:
+      TAXAX_LEGAL_DATA_DIR: /data
+      TAXAX_LAW_GO_OC: ${TAXAX_LAW_GO_OC:-}
+      TAXAX_NTS_ENABLED: ${TAXAX_NTS_ENABLED:-0}
+      TAXAX_NTS_TERMS_CONFIRMED: ${TAXAX_NTS_TERMS_CONFIRMED:-0}
+      TAXAX_OLTA_ENABLED: ${TAXAX_OLTA_ENABLED:-0}
+      TAXAX_OLTA_TERMS_CONFIRMED: ${TAXAX_OLTA_TERMS_CONFIRMED:-0}
+      TAXAX_MCP_AUTH_ISSUER: ${TAXAX_MCP_AUTH_ISSUER:?required}
+      TAXAX_MCP_AUTH_AUDIENCE: ${TAXAX_MCP_AUTH_AUDIENCE:?required}
+      TAXAX_MCP_AUTH_RESOURCE: ${TAXAX_MCP_AUTH_RESOURCE:?required}
+      TAXAX_MCP_AUTH_JWKS_URL: ${TAXAX_MCP_AUTH_JWKS_URL:?required}
+      TAXAX_MCP_AUTH_REQUIRED_SCOPES: ${TAXAX_MCP_AUTH_REQUIRED_SCOPES:-legal.read}
+      TAXAX_MCP_AUTH_ALGORITHMS: ${TAXAX_MCP_AUTH_ALGORITHMS:-RS256}
+      TAXAX_MCP_AUTH_ORG_CLAIM: ${TAXAX_MCP_AUTH_ORG_CLAIM:-org_id}
+      TAXAX_MCP_ALLOWED_HOSTS: ${TAXAX_MCP_ALLOWED_HOSTS:?required}
+      TAXAX_MCP_ALLOWED_ORIGINS: ${TAXAX_MCP_ALLOWED_ORIGINS:?required}
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - legal-data:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+
+volumes:
+  legal-data:
