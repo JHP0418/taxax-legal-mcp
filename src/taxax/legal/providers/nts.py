@@ -10,7 +10,7 @@ from typing import Any, Callable, Mapping
 from urllib.parse import urlencode, urlparse
 
 from ..models import ErrorCode
-from ..transport import HttpResponse, SessionHttpTransport, TransportError, decode_body
+from ..transport import HttpResponse, SessionHttpTransport, decode_body
 from .base import ProviderError, SupplementalResult
 
 BASE_URL = "https://taxlaw.nts.go.kr"
@@ -19,7 +19,7 @@ ACTION_URL = f"{BASE_URL}/action.do"
 SEARCH_ACTION = "ASEISA001MR01"
 DETAIL_ACTION = "ASIQTB002PR01"
 FILE_META_ACTION = "ACMCMA001MR02"
-PARSER_VERSION = "nts-taxlaw-v1"
+PARSER_VERSION = "nts-taxlaw-v2"
 
 COLLECTIONS = {
     "form": "appendForm",
@@ -55,7 +55,7 @@ def _walk(value: Any):
 _HIGHLIGHT_MARKUP = re.compile(r"<!HS>|<!HE>")
 
 
-def _strip_highlight_markup(value: str) -> str:
+def strip_highlight_markup(value: str) -> str:
     """NTS 검색 API는 검색어와 일치한 부분을 <!HS>...<!HE>로 감싸 돌려준다.
 
     이건 우리 쪽 파싱 실수가 아니라 NTS 응답 JSON 문자열 값에 그 태그가
@@ -69,7 +69,7 @@ def _first(mapping: Mapping[str, Any], *keys: str) -> str | None:
     for key in keys:
         value = mapping.get(key)
         if isinstance(value, (str, int, float)) and str(value).strip():
-            return _strip_highlight_markup(str(value).strip())
+            return strip_highlight_markup(str(value).strip())
     return None
 
 
@@ -118,8 +118,8 @@ def _normalize_item(item: Mapping[str, Any], collection: str) -> dict[str, Any]:
     title = _first(item, "TTL", "TITLE", "NTST_DCM_NM", "SJ")
     if not source_id or not title:
         raise ProviderError(ErrorCode.INCOMPLETE_RESULT, "NTS 검색 항목에서 문서 ID 또는 제목을 확인하지 못했습니다.")
-    registered = _date(_first(item, "DCM_RGT_DTM_S", "DATE", "DCM_RGT_DTM"))
-    summary = _first(item, "GIST_CNTN", "NTST_DCM_DSCM_CNTN", "CNTN")
+    registered = _date(_first(item, "NTST_DCM_RGT_DT", "DCM_RGT_DTM_S", "DATE", "DCM_RGT_DTM"))
+    summary = _first(item, "GIST_CNTN", "CNTN")
     sections = []
     if summary:
         sections.append({"section_id": "summary-1", "kind": "summary", "heading": "검색 요약", "locator": "search-result", "text": summary, "derived": False, "source_field": "GIST_CNTN"})
@@ -129,12 +129,13 @@ def _normalize_item(item: Mapping[str, Any], collection: str) -> dict[str, Any]:
         "document_type": _document_type(collection, item),
         "issuer": "국세청",
         "registered_at": registered,
-        "interpreted_on": registered,
+        "interpreted_on": _date(_first(item, "EXPL_YD", "explYd", "interpretedOn")),
         "official_url": f"{BASE_URL}/qt/USEQTA002P.do?{urlencode({'ntstDcmId': source_id})}",
         "tax_type": _first(item, "NTST_TLAW_CL_NM"),
         "sections": sections,
         "metadata": {
             "collection": collection,
+            "document_number": _first(item, "NTST_DCM_DSCM_CNTN", "ntstDcmDscmCntn"),
             "document_class": _first(item, "NTST_DCM_CL_NM"),
             "source_organization_code": _first(item, "NTST_DCM_SRCS_ORGN_CL_CD"),
             "file_id": _first(item, "NTST_FLE_ID"),
@@ -157,11 +158,11 @@ class NtsProvider:
         cache_ttl_seconds: float = 300.0,
         clock: Callable[[], float] = time.monotonic,
     ):
-        requested = os.environ.get("TAXAX_NTS_ENABLED") == "1" if enabled is None else enabled
-        accepted = os.environ.get("TAXAX_NTS_TERMS_CONFIRMED") == "1" if terms_confirmed is None else terms_confirmed
-        self.enabled = bool(requested and accepted)
-        self.requested = bool(requested)
-        self.terms_confirmed = bool(accepted)
+        self.enabled = (
+            os.environ.get("TAXAX_NTS_ENABLED", "").strip() != "0"
+            if enabled is None
+            else bool(enabled)
+        )
         self.transport = transport or SessionHttpTransport("taxlaw.nts.go.kr")
         self.cache_ttl_seconds = cache_ttl_seconds
         self.clock = clock
@@ -174,7 +175,6 @@ class NtsProvider:
             "implemented": True,
             "fixture_verified": True,
             "enabled": self.enabled,
-            "terms_confirmed": self.terms_confirmed,
             "limited_query_only": True,
             "bulk_collection": False,
             "search_collections": dict(COLLECTIONS),
@@ -225,7 +225,7 @@ class NtsProvider:
         cached = self._cache.get(cache_key)
         if cached and self.clock() - cached[0] <= self.cache_ttl_seconds:
             return replace(cached[1], warnings=(*cached[1].warnings, "동일 검색 cache를 재사용했습니다."))
-        result = self._with_one_reset(lambda: self._search(request_parameters, collections, start_date, end_date))
+        result = self._search(request_parameters, collections, start_date, end_date)
         self._cache[cache_key] = (self.clock(), result)
         return result
 
@@ -327,7 +327,7 @@ class NtsProvider:
         self._require_enabled()
         if not re.fullmatch(r"[A-Za-z0-9]{1,64}", document_id):
             raise ProviderError(ErrorCode.INVALID_REQUEST, "NTS 문서 ID 형식이 올바르지 않습니다.")
-        return self._with_one_reset(lambda: self._detail(document_id))
+        return self._detail(document_id)
 
     def _detail(self, document_id: str) -> SupplementalResult:
         page_url = f"{BASE_URL}/qt/USEQTA002P.do?{urlencode({'ntstDcmId': document_id})}"
@@ -361,18 +361,19 @@ class NtsProvider:
                 if value:
                     sections.append({"section_id": f"{kind}-{len(sections) + 1}", "kind": kind, "heading": fields[0], "locator": fields[0], "text": value, "derived": False, "source_field": fields[0]})
                     break
-        registered = _date(_first(detail, "dcmRgtDtm", "DCM_RGT_DTM_S", "date"))
+        registered = _date(_first(detail, "ntstDcmRgtDt", "dcmRgtDtm", "DCM_RGT_DTM_S", "date"))
         item = {
             "source_document_id": document_id,
             "title": title,
             "document_type": _document_type("question", detail),
             "issuer": "국세청",
             "registered_at": registered,
-            "interpreted_on": _date(_first(detail, "explYd", "interpretedOn")) or registered,
+            "interpreted_on": _date(_first(detail, "explYd", "interpretedOn")),
             "official_url": page_url,
             "tax_type": _first(detail, "ntstTlawClNm", "NTST_TLAW_CL_NM"),
             "sections": sections,
             "metadata": {
+                "document_number": _first(detail, "ntstDcmDscmCntn", "NTST_DCM_DSCM_CNTN"),
                 "file_id": _first(detail, "ntstFleId", "NTST_FLE_ID"),
                 "tax_scope": "national",
                 "preview_only": False,
@@ -386,7 +387,7 @@ class NtsProvider:
         self._require_enabled()
         if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", file_id):
             raise ProviderError(ErrorCode.INVALID_REQUEST, "NTS 첨부 ID 형식이 올바르지 않습니다.")
-        return self._with_one_reset(lambda: self._attachment(file_id))
+        return self._attachment(file_id)
 
     def _attachment(self, file_id: str) -> SupplementalResult:
         self._bootstrap()
@@ -436,17 +437,6 @@ class NtsProvider:
             raise ProviderError(ErrorCode.INCOMPLETE_RESULT, "NTS 공개 검색 세션 초기화 화면이 변경됐습니다.")
         self._bootstrapped = True
 
-    def _with_one_reset(self, operation):
-        try:
-            return operation()
-        except (ProviderError, TransportError):
-            self.transport.reset()
-            self._bootstrapped = False
-            try:
-                return operation()
-            except (ProviderError, TransportError):
-                raise
-
     @staticmethod
     def _parse_date(value: str | None) -> date | None:
         normalized = _date(value)
@@ -456,5 +446,7 @@ class NtsProvider:
 
     def _require_enabled(self) -> None:
         if not self.enabled:
-            reason = "이용조건 확인이 필요합니다." if self.requested and not self.terms_confirmed else "운영 정책에서 비활성 상태입니다."
-            raise ProviderError(ErrorCode.POLICY_DISABLED, f"NTS 보완 adapter는 {reason}")
+            raise ProviderError(
+                ErrorCode.POLICY_DISABLED,
+                "NTS 보완 adapter는 운영 설정에서 비활성 상태입니다.",
+            )

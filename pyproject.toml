@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "taxax-legal-mcp"
-version = "0.2.8"
-description = "Deterministic Korean tax-law research service and MCP server"
+version = "0.2.11"
+description = "Korean tax-law source lookup and citation verification MCP server"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -24,7 +24,9 @@ classifiers = [
 
 [project.optional-dependencies]
 dev = ["build>=1.2,<2"]
-windows = ["pyinstaller>=6.11,<7"]
+# PyInstaller가 mcp 패키지의 하위 모듈을 훑을 때 mcp의 CLI 경로까지 import를
+# 시도하므로, 그 선택적 의존성인 typer가 없으면 수집 단계에서 실패한다.
+windows = ["pyinstaller>=6.11,<7", "typer>=0.12,<0.20"]
 
 [project.scripts]
 taxax-legal = "taxax.legal.cli:main"

@@ -13,7 +13,12 @@ import tempfile
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
-_VERSION = "0.2.0"
+# 설치 없이 체크아웃에서 바로 실행해도 버전 출처 한 곳을 그대로 쓰기 위해.
+sys.path.insert(0, str(_ROOT / "src"))
+from taxax.legal.version import source_version  # noqa: E402
+
+# 빌드 산출물에는 이 체크아웃이 만들 버전을 붙인다(설치된 구버전이 아니라).
+_VERSION = source_version()
 
 
 def _sha256(path: Path) -> str:

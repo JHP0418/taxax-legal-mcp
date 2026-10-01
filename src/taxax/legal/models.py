@@ -108,6 +108,7 @@ class LegalDocument(StrictModel):
     issuer: str | None = None
     court: str | None = None
     case_no: str | None = None
+    document_number: str | None = None
     tax_type: str | None = None
     jurisdiction: str = "KR"
     promulgated_on: str | None = None
@@ -135,6 +136,7 @@ class LegalDocument(StrictModel):
 
 class CitationInput(StrictModel):
     document_id: str
+    version_id: str | None = None
     quote: str | None = None
     locator: str | None = None
     expected_provider: str | None = None
@@ -143,6 +145,7 @@ class CitationInput(StrictModel):
 
 class CitationCheck(StrictModel):
     document_id: str
+    version_id: str | None = None
     status: CitationStatus
     document_exists: bool
     metadata_matches: bool | None = None
@@ -213,10 +216,14 @@ class ResearchReport(StrictModel):
 class SourceReference(StrictModel):
     provider: str
     document_id: str | None = None
+    version_id: str | None = None
     title: str | None = None
+    document_number: str | None = None
     official_url: str | None = None
+    version_url: str | None = None
     retrieved_at: str | None = None
     raw_sha256: str | None = None
+    snapshot_raw_sha256: str | None = None
     snapshot_ref: str | None = None
     section_locator: str | None = None
 

@@ -5,7 +5,6 @@ import json
 from .models import (
     ContentCompleteness,
     LegalDocument,
-    ResearchReport,
     ReviewState,
     TemporalStatus,
     TextSection,
@@ -166,25 +165,25 @@ def install_synthetic_demo(service: LegalKnowledgeService) -> list[LegalDocument
 
 def run_synthetic_demo(service: LegalKnowledgeService):
     documents = install_synthetic_demo(service)
-    response = service.research_tax_issue(
-        issue="법인세 대손금 손금산입",
-        tax_type="법인세",
-        transaction_date="2025-06-30",
-        research_as_of="2026-09-14",
-        knowledge_cutoff="2025-12-31",
-        upstream=False,
+    search = service.search_legal_sources(query="대손금", upstream=False)
+    response = service.get_legal_document(document_id=documents[0].document_id)
+    citation = service.verify_legal_citations(
+        citations=[
+            {
+                "document_id": documents[0].document_id,
+                "locator": documents[0].sections[0].locator,
+                "quote": documents[0].sections[0].text,
+            }
+        ]
     )
     notice = "제품 동작 시연용 합성 자료이며 실제 법령·판례·세무 결론이 아닙니다."
-    report = ResearchReport.model_validate(response.data)
-    report.assumptions.append("합성 fixture 문서만 사용한 offline 제품 시연입니다.")
-    report.limitations.append(notice)
-    service.report_repository.save(report, principal_id="local-stdio", org_id="local")
-    response.data = report.model_dump(mode="json")
     response.data["demo"] = {
         "synthetic": True,
         "official_source": False,
         "document_ids": [document.document_id for document in documents],
         "notice": notice,
+        "search_status": search.status.value,
+        "citation_checks": citation.data["checks"],
     }
     response.warnings.insert(0, notice)
     return response

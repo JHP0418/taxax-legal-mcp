@@ -9,6 +9,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
+from scripts.export_legal_public import _selected_files
+from scripts.validate_legal_distribution import _source_tests
 from taxax.legal import installer as installer_module
 from taxax.legal.cli import main
 from taxax.legal.installer import (
@@ -19,6 +21,14 @@ from taxax.legal.installer import (
 )
 
 _SERVER = "taxax-legal"
+
+
+class PublicPackageTests(unittest.TestCase):
+    def test_public_test_selection_excludes_private_campaign_runner_dependency(self):
+        selected = {path.name for path in _selected_files()}
+        self.assertNotIn("test_legal_claude_e2e.py", selected)
+        self.assertNotIn("tests/test_legal_claude_e2e.py", _source_tests())
+        self.assertIn("test_legal_mcp.py", selected)
 
 
 class PipInstallCommandTests(unittest.TestCase):
@@ -106,6 +116,48 @@ class PipInstallCommandTests(unittest.TestCase):
             self.assertEqual(payload["mcpServers"]["other"], {"command": "keep-me"})
             self.assertIn(_SERVER, payload["mcpServers"])
 
+    def test_codex_install_registers_one_stop_hook_and_user_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scripts, data_dir, config = self._environment(root)
+            codex_config = root / "codex" / "config.toml"
+            hooks_file = codex_config.with_name("hooks.json")
+            a, b, c = self._patches(scripts, data_dir)
+            with a, b, c:
+                first = install_pip_application(
+                    config_path=config, credential=None, consent_to_configure_claude=False,
+                    register_claude=False, register_codex_client=True, codex_config_path=codex_config,
+                )
+                second = install_pip_application(
+                    config_path=config, credential=None, consent_to_configure_claude=False,
+                    register_claude=False, register_codex_client=True, codex_config_path=codex_config,
+                )
+            self.assertEqual(first.codex_hook_path, hooks_file)
+            self.assertEqual(second.codex_hook_path, hooks_file)
+            self.assertEqual(len(json.loads(hooks_file.read_text())["hooks"]["Stop"]), 1)
+            self.assertEqual(json.loads(codex_config.with_name("taxax-legal-hook.json").read_text()),
+                             {"enabled": True, "max_rechecks": 1})
+
+    @unittest.skipIf(os.name == "nt", "Linux Codex-only uninstall path")
+    def test_codex_only_uninstall_preserves_user_hook_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scripts, data_dir, _ = self._environment(root)
+            codex_config = root / "codex" / "config.toml"
+            a, b, c = self._patches(scripts, data_dir)
+            with a, b, c:
+                install_pip_application(
+                    credential=None, consent_to_configure_claude=False,
+                    register_claude=False, register_codex_client=True, codex_config_path=codex_config,
+                )
+            stream = io.StringIO()
+            with patch("taxax.legal.cli.default_claude_code_config", return_value=root / "claude.json"):
+                with redirect_stdout(stream):
+                    code = main(["uninstall", "--keep-credential", "--yes", "--codex-config", str(codex_config)])
+            self.assertEqual(code, 0)
+            self.assertTrue(json.loads(stream.getvalue())["codex_hook_removed"])
+            self.assertTrue(codex_config.with_name("taxax-legal-hook.json").exists())
+
     def test_conflicting_registration_requires_force(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -187,7 +239,12 @@ class PipInstallCommandTests(unittest.TestCase):
         """Microsoft Store 파이썬은 존재하지 않는 scripts 경로를 보고하고 PATH에도 없다."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            real = root / "LocalCache" / "local-packages" / "Python311" / "Scripts"
+            # console_script는 user site-packages 옆의 Scripts(Windows) 또는
+            # bin(그 외)을 본다. 여기서 이름을 고정해 버리면 리눅스에서는 이
+            # 가짜 경로가 후보에 걸리지 않아, 대신 진짜 인터프리터 옆에 설치된
+            # 실제 실행파일을 찾아버려 시나리오 자체가 성립하지 않는다.
+            scripts_dir = "Scripts" if os.name == "nt" else "bin"
+            real = root / "LocalCache" / "local-packages" / "Python311" / scripts_dir
             real.mkdir(parents=True)
             suffix = ".exe" if os.name == "nt" else ""
             (real / f"taxax-legal-mcp{suffix}").write_bytes(b"stub")
@@ -223,9 +280,7 @@ class PipInstallCommandTests(unittest.TestCase):
             self.assertFalse(payload["credential_configured"])
             self.assertTrue(any("재시작" in step for step in payload["next_steps"]))
 
-    def test_nts_olta_consent_is_written_as_env_flags_not_stored_anywhere_else(self):
-        """NTS/OLTA는 발급 키가 없어 사이트와 통신하지 않는다. 동의 여부는 순수하게
-        MCP client가 서버를 실행할 때 넘겨주는 환경변수로만 전달돼야 한다."""
+    def test_legacy_consent_arguments_do_not_generate_provider_env_flags(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             scripts, data_dir, config = self._environment(root)
@@ -238,46 +293,60 @@ class PipInstallCommandTests(unittest.TestCase):
                     nts_consent=True,
                     olta_consent=True,
                 )
-            self.assertTrue(result.credential_configured is False)
+            self.assertFalse(result.credential_configured)
             entry = json.loads(config.read_text(encoding="utf-8"))["mcpServers"][_SERVER]
             self.assertEqual(
                 entry["env"],
-                {
-                    "TAXAX_LEGAL_DATA_DIR": str(data_dir.resolve()),
-                    "TAXAX_NTS_ENABLED": "1",
-                    "TAXAX_NTS_TERMS_CONFIRMED": "1",
-                    "TAXAX_OLTA_ENABLED": "1",
-                    "TAXAX_OLTA_TERMS_CONFIRMED": "1",
-                },
+                {"TAXAX_LEGAL_DATA_DIR": str(data_dir.resolve())},
             )
 
-    def test_cli_nts_flag_without_terms_confirmation_stays_off_non_interactively(self):
+    def test_cli_install_is_noninteractive_and_providers_are_enabled_by_default(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             scripts, data_dir, config = self._environment(root)
             a, b, c = self._patches(scripts, data_dir)
             stream = io.StringIO()
-            # 이 harness는 stdin.isatty()가 실제로 True를 보고할 수 있어(pty 연결),
-            # 실제 비대화형(CI/파이프) 시나리오를 재현하려면 명시적으로 False로 고정한다.
-            with a, b, c, patch("sys.stdin.isatty", return_value=False), redirect_stdout(stream):
-                code = main(["install", "--no-oc", "--nts", "--olta", "--config", str(config)])
+            with (
+                a,
+                b,
+                c,
+                patch("sys.stdin.isatty", return_value=True),
+                patch(
+                    "sys.stdin.readline",
+                    side_effect=AssertionError("install must not prompt"),
+                ),
+                redirect_stdout(stream),
+            ):
+                code = main(["install", "--no-oc", "--config", str(config)])
             self.assertEqual(code, 0)
             payload = json.loads(stream.getvalue())
-            self.assertFalse(payload["nts_enabled"])
-            self.assertFalse(payload["olta_enabled"])
+            self.assertTrue(payload["nts_enabled"])
+            self.assertTrue(payload["olta_enabled"])
+            self.assertFalse(
+                any("terms" in step.lower() or "약관" in step for step in payload["next_steps"])
+            )
             entry = json.loads(config.read_text(encoding="utf-8"))["mcpServers"][_SERVER]
-            self.assertNotIn("TAXAX_NTS_ENABLED", entry["env"])
-            self.assertNotIn("TAXAX_OLTA_ENABLED", entry["env"])
-            self.assertTrue(any("nts-terms-confirmed" in step for step in payload["next_steps"]))
-            self.assertTrue(any("olta-terms-confirmed" in step for step in payload["next_steps"]))
+            self.assertEqual(
+                entry["env"],
+                {"TAXAX_LEGAL_DATA_DIR": str(data_dir.resolve())},
+            )
 
-    def test_cli_nts_terms_confirmed_flag_enables_without_prompt(self):
+    def test_legacy_provider_and_terms_flags_are_accepted_as_noops(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             scripts, data_dir, config = self._environment(root)
             a, b, c = self._patches(scripts, data_dir)
             stream = io.StringIO()
-            with a, b, c, redirect_stdout(stream):
+            with (
+                a,
+                b,
+                c,
+                patch(
+                    "sys.stdin.readline",
+                    side_effect=AssertionError("install must not prompt"),
+                ),
+                redirect_stdout(stream),
+            ):
                 code = main(
                     [
                         "install",
@@ -295,8 +364,10 @@ class PipInstallCommandTests(unittest.TestCase):
             self.assertTrue(payload["nts_enabled"])
             self.assertTrue(payload["olta_enabled"])
             entry = json.loads(config.read_text(encoding="utf-8"))["mcpServers"][_SERVER]
-            self.assertEqual(entry["env"]["TAXAX_NTS_TERMS_CONFIRMED"], "1")
-            self.assertEqual(entry["env"]["TAXAX_OLTA_TERMS_CONFIRMED"], "1")
+            self.assertNotIn("TAXAX_NTS_ENABLED", entry["env"])
+            self.assertNotIn("TAXAX_NTS_TERMS_CONFIRMED", entry["env"])
+            self.assertNotIn("TAXAX_OLTA_ENABLED", entry["env"])
+            self.assertNotIn("TAXAX_OLTA_TERMS_CONFIRMED", entry["env"])
 
     def test_claude_code_registration_preserves_other_settings_and_declares_transport(self):
         """`~/.claude.json`에는 MCP 외 설정도 함께 있으므로 우리 항목만 더해야 한다."""
@@ -332,7 +403,10 @@ class PipInstallCommandTests(unittest.TestCase):
             entry = payload["mcpServers"][_SERVER]
             self.assertEqual(entry["type"], "stdio")
             self.assertEqual(entry["args"], ["--transport", "stdio"])
-            self.assertEqual(entry["env"]["TAXAX_NTS_ENABLED"], "1")
+            self.assertEqual(
+                entry["env"],
+                {"TAXAX_LEGAL_DATA_DIR": str(data_dir.resolve())},
+            )
 
     def test_claude_code_is_untouched_unless_requested(self):
         with tempfile.TemporaryDirectory() as directory:

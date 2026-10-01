@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.metadata
 import json
 import os
 import re
@@ -12,9 +11,10 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlparse
 
-from .citations import verify_citations
+from .citations import heading_only_article, incomplete_law_articles, verify_citations
 from .models import (
     CitationInput,
+    CitationStatus,
     ContentCompleteness,
     Coverage,
     ErrorCode,
@@ -22,6 +22,7 @@ from .models import (
     LegalToolResponse,
     Pagination,
     ResponseStatus,
+    RetrievalStatus,
     ReviewState,
     SourceReference,
     TemporalStatus,
@@ -33,21 +34,15 @@ from .providers.korean_law_bridge import KoreanLawBridge
 from .providers.law_go import CONTRACTS, PARSER_VERSION, LawGoProvider
 from .providers.nts import NtsProvider
 from .providers.olta import OltaProvider
-from .reports import ResearchReportRepository
-from .repository import LegalRepository
-from .research import run_tax_research
+from .repository import AmbiguousDocumentVersion, LegalRepository
 from .seeds import FORM_SPECS, LAW_GROUPS, NTS_SPECS
 from .snapshots import SnapshotStore, sha256_bytes
+from .paths import default_legal_data_dir
 from .temporal import temporal_candidates
 from .transport import TransportError, normalized_json_bytes
+from .version import package_version
 
 MAX_QUERY_CHARS = 500
-# research_tax_issue의 issue는 검색 키워드가 아니라 사실관계 서술이다. 실제
-# 세무 케이스는 금액·지분율·날짜가 얽힌 여러 문단이 될 수 있어, 검색어용 500자
-# 제한을 그대로 적용하면 복잡한(=조사가 더 필요한) 케이스일수록 입력 자체가
-# 거부되는 역설이 생긴다. 업스트림 검색에는 짧게 줄인 버전을 쓴다
-# (research.py의 _upstream_query 참고).
-MAX_ISSUE_CHARS = 4000
 DEFAULT_OUTPUT_CHARS = 16 * 1024
 MAX_OUTPUT_CHARS = 64 * 1024
 _PII_PATTERNS = (
@@ -57,6 +52,7 @@ _PII_PATTERNS = (
 )
 _PROVIDER_ALIASES = {
     "law.go.kr": "law.go.kr",
+    "law_go_kr": "law.go.kr",
     "www.law.go.kr": "law.go.kr",
     "official": "law.go.kr",
     "taxlaw.nts.go.kr": "taxlaw.nts.go.kr",
@@ -85,34 +81,25 @@ def request_id() -> str:
     return "req-" + uuid.uuid4().hex
 
 
-def default_legal_data_dir() -> Path:
-    if os.name == "nt":
-        configured = os.environ.get("LOCALAPPDATA", "").strip()
-        base = Path(configured).expanduser() if configured else Path.home() / "AppData" / "Local"
-        return base / "TAXax" / "legal"
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "TAXax" / "legal"
-    configured = os.environ.get("XDG_DATA_HOME", "").strip()
-    base = Path(configured).expanduser() if configured and Path(configured).expanduser().is_absolute() else Path.home() / ".local" / "share"
-    return base / "taxax" / "legal"
 
 
 def _validate_query(value: str) -> str:
+    # 세 가지 다른 잘못을 한 문구로 뭉뚱그리면 고칠 방법을 알 수 없다. 공백만
+    # 넣은 사람에게 "1~500자여야 합니다"라고 하면, 세 글자를 넣었는데 왜
+    # 걸렸는지 알 수 없다. 실제 이유는 다듬고 나니 아무것도 남지 않은 것이다.
     query = value.strip()
-    if not query or len(query) > MAX_QUERY_CHARS or "\x00" in query:
-        raise ProviderError(ErrorCode.INVALID_REQUEST, f"query는 1~{MAX_QUERY_CHARS}자여야 합니다.")
+    if "\x00" in query:
+        raise ProviderError(ErrorCode.INVALID_REQUEST, "query에 널 문자를 넣을 수 없습니다.")
+    if not query:
+        raise ProviderError(ErrorCode.INVALID_REQUEST, "query가 비어 있습니다. 공백만으로는 조회할 수 없습니다.")
+    if len(query) > MAX_QUERY_CHARS:
+        raise ProviderError(
+            ErrorCode.INVALID_REQUEST,
+            f"query가 {len(query)}자로 최대 {MAX_QUERY_CHARS}자를 넘었습니다.",
+        )
     if any(pattern.search(query) for pattern in _PII_PATTERNS):
         raise ProviderError(ErrorCode.ACCESS_DENIED, "고객 식별정보가 포함될 수 있는 질의는 법률 출처로 전송하지 않습니다.")
     return query
-
-
-def _validate_issue(value: str) -> str:
-    issue = value.strip()
-    if not issue or len(issue) > MAX_ISSUE_CHARS or "\x00" in issue:
-        raise ProviderError(ErrorCode.INVALID_REQUEST, f"issue는 1~{MAX_ISSUE_CHARS}자여야 합니다.")
-    if any(pattern.search(issue) for pattern in _PII_PATTERNS):
-        raise ProviderError(ErrorCode.ACCESS_DENIED, "고객 식별정보가 포함될 수 있는 질의는 법률 출처로 전송하지 않습니다.")
-    return issue
 
 
 def _cursor_offset(cursor: str | None) -> int:
@@ -120,7 +107,10 @@ def _cursor_offset(cursor: str | None) -> int:
         return 0
     if not re.fullmatch(r"\d+", cursor):
         raise ProviderError(ErrorCode.INVALID_REQUEST, "cursor 형식이 올바르지 않습니다.")
-    return int(cursor)
+    offset = int(cursor)
+    if offset > 2**63 - 1:
+        raise ProviderError(ErrorCode.INVALID_REQUEST, "cursor가 지원 범위를 벗어났습니다.")
+    return offset
 
 
 def _provider_name(value: str | None, default: str) -> str:
@@ -132,17 +122,25 @@ def _provider_name(value: str | None, default: str) -> str:
     try:
         return _PROVIDER_ALIASES[normalized]
     except KeyError:
-        raise ProviderError(ErrorCode.INVALID_REQUEST, "지원하지 않는 법률 출처 provider입니다.") from None
+        raise ProviderError(
+            ErrorCode.INVALID_REQUEST,
+            "지원하지 않는 법률 출처 provider입니다. law.go.kr, taxlaw.nts.go.kr, olta.re.kr 또는 all을 사용하십시오.",
+            details={"accepted_providers": ["law.go.kr", "taxlaw.nts.go.kr", "olta.re.kr", "all"]},
+        ) from None
 
 
 def _source(document: LegalDocument, locator: str | None = None) -> SourceReference:
     return SourceReference(
         provider=document.provider,
         document_id=document.document_id,
+        version_id=document.version_id,
         title=document.title,
+        document_number=document.document_number,
         official_url=document.official_url,
+        version_url=document.version_url,
         retrieved_at=document.retrieved_at,
         raw_sha256=document.raw_sha256,
+        snapshot_raw_sha256=document.metadata.get("snapshot_raw_sha256"),
         snapshot_ref=document.snapshot_ref,
         section_locator=locator,
     )
@@ -159,7 +157,6 @@ class LegalKnowledgeService:
         olta_provider: OltaProvider | None = None,
         bridge: KoreanLawBridge | None = None,
         repository: LegalRepository | None = None,
-        report_repository: ResearchReportRepository | None = None,
         snapshots: SnapshotStore | None = None,
         knowledge_dir: Path | None = None,
         legacy_snapshot_root: Path | None = None,
@@ -188,7 +185,6 @@ class LegalKnowledgeService:
         self.olta_provider = olta_provider or OltaProvider()
         self.bridge = bridge or KoreanLawBridge(enabled=os.environ.get("TAXAX_KOREAN_LAW_BRIDGE", "").lower() == "enabled")
         self.repository = repository or LegalRepository(self.data_dir / "v1" / "legal.sqlite3")
-        self.report_repository = report_repository or ResearchReportRepository(self.data_dir / "private" / "v1" / "reports.sqlite3")
         self.snapshots = snapshots or SnapshotStore(self.data_dir, parser_version=PARSER_VERSION)
 
     def search_knowledge(self, *, query: str, k_ar_id: str | None = None, limit: int = 10) -> LegalToolResponse:
@@ -293,6 +289,12 @@ class LegalKnowledgeService:
             if normalized_jurisdiction and not re.fullmatch(r"[A-Z]{2}", normalized_jurisdiction):
                 raise ProviderError(ErrorCode.INVALID_REQUEST, "jurisdiction은 ISO 3166-1 alpha-2 형식이어야 합니다.")
             if upstream:
+                if cursor is not None:
+                    if page != 1 or selected_provider == "all":
+                        raise ProviderError(ErrorCode.INVALID_REQUEST, "upstream cursor는 개별 provider에서 page와 함께 지정할 수 없습니다.")
+                    page = _cursor_offset(cursor)
+                    if page < 1:
+                        raise ProviderError(ErrorCode.INVALID_REQUEST, "upstream cursor의 page는 1 이상이어야 합니다.")
                 result = self._search_upstream(
                     query=value,
                     selected_provider=selected_provider,
@@ -356,6 +358,7 @@ class LegalKnowledgeService:
                 pagination=Pagination(page=(offset // limit) + 1, page_size=limit, total=total, next_cursor=next_cursor),
                 coverage=Coverage(queried_providers=["local-legal-index"], succeeded_providers=["local-legal-index"], fetched=len(documents), next_cursor=next_cursor),
                 freshness={"upstream": False},
+                warnings=self._empty_index_warnings(total) + self._unapplied_filter_warnings(filters),
             )
         except (ProviderError, TransportError, ValueError, OSError) as exc:
             return self._error_response(rid, exc, provider=selected_provider if upstream else "local-legal-index")
@@ -364,6 +367,7 @@ class LegalKnowledgeService:
         self,
         *,
         document_id: str | None = None,
+        version_id: str | None = None,
         target: str | None = None,
         provider: str | None = None,
         source_document_id: str | None = None,
@@ -384,8 +388,28 @@ class LegalKnowledgeService:
             section_index, character_offset = self._section_cursor(section_cursor)
             if not 1 <= max_chars <= MAX_OUTPUT_CHARS:
                 raise ProviderError(ErrorCode.INVALID_REQUEST, f"max_chars는 1~{MAX_OUTPUT_CHARS}여야 합니다.")
-            document = self.repository.get_document(document_id) if document_id else None
+            document = self._selected_document(document_id, version_id) if document_id else None
+            if version_id and document is None:
+                raise ProviderError(ErrorCode.NOT_FOUND, "요청한 version_id의 저장 문서가 없습니다. 다른 시행본으로 대체하지 않았습니다.")
             warnings: list[str] = []
+            # article·attachment·response_type·effective_on·identifier_kind는 upstream
+            # 조회에만 쓰인다. 캐시에 문서가 있으면 아래 블록을 통째로 건너뛰므로
+            # 이 값들은 아무 효과가 없는데, 예전에는 그 사실을 알리지 않아 지정한
+            # 쪽에서는 적용된 결과를 보고 있다고 오해했다. 받아놓고 조용히 무시하는
+            # 것이 가장 나쁘다. 무엇이 반영되지 않았고 어떻게 하면 반영되는지 적는다.
+            fetch_only = {
+                "article": article,
+                "attachment": attachment or None,
+                "response_type": response_type if response_type.upper() != "JSON" else None,
+                "effective_on": effective_on,
+            }
+            supplied = sorted(name for name, value in fetch_only.items() if value)
+            if supplied and not refresh and document is not None:
+                warnings.append(
+                    f"{', '.join(supplied)}은(는) 원문을 새로 받아올 때만 적용됩니다. "
+                    "저장된 문서를 그대로 돌려주었으므로 이 값들은 반영되지 않았습니다. "
+                    "적용하려면 refresh=true로 다시 요청하십시오."
+                )
             if refresh or document is None:
                 selected_provider = _provider_name(provider, document.provider if document else self.provider.name)
                 if selected_provider == "all":
@@ -397,6 +421,21 @@ class LegalKnowledgeService:
                     target_value = target or (str(document.metadata.get("target")) if document and document.metadata.get("target") else None)
                     if target_value is None:
                         raise ProviderError(ErrorCode.INVALID_REQUEST, "법제처 상세 조회에는 target이 필요합니다.")
+                    if document is not None and source_document_id is None:
+                        upstream_ids = document.metadata.get("upstream_identifiers") or {}
+                        requested_mst = document.metadata.get("requested_mst")
+                        known_mst = upstream_ids.get("MST") if isinstance(upstream_ids, Mapping) else None
+                        pinned_mst = requested_mst or (
+                            document.version_id if isinstance(known_mst, list) and document.version_id in known_mst else None
+                        ) if version_id or requested_mst else None
+                        if pinned_mst and identifier_kind.upper() == "ID":
+                            identifier_kind = "MST"
+                        candidates = upstream_ids.get(identifier_kind.upper()) if isinstance(upstream_ids, Mapping) else None
+                        if pinned_mst and identifier_kind.upper() == "MST":
+                            candidates = [pinned_mst]
+                        if not isinstance(candidates, list) or len(candidates) != 1 or not isinstance(candidates[0], str) or not candidates[0]:
+                            raise ProviderError(ErrorCode.INCOMPLETE_RESULT, "저장된 검색 항목에서 요청 식별자 종류를 유일하게 확인할 수 없습니다. 공식 ID 또는 MST를 명시하십시오.")
+                        source_id = candidates[0]
                     _, documents, reused = self._collect_detail(
                         LegalTarget(target_value),
                         identifier=source_id,
@@ -420,16 +459,32 @@ class LegalKnowledgeService:
                 if not documents:
                     raise ProviderError(ErrorCode.NOT_FOUND, "상세 응답에서 문서를 찾지 못했습니다.")
                 document = documents[0]
+                if version_id and document.version_id != version_id:
+                    raise ProviderError(ErrorCode.TEMPORAL_UNRESOLVED, "상세 응답이 요청한 version_id와 일치하지 않습니다.")
                 if reused:
                     warnings.append("같은 수집 창의 완료 run을 재사용했습니다.")
             if document is None:
                 raise ProviderError(ErrorCode.NOT_FOUND, "법률 문서를 찾지 못했습니다.")
+            if document.metadata.get("version_identity_source") == "request_mst":
+                warnings.append("공식 응답에 MST가 없어 요청한 MST를 버전 식별자로 보존했습니다. 적용 시점과 버전 링크를 별도로 확인하십시오.")
+            original_incomplete = (
+                document.retrieval_status != RetrievalStatus.SUCCESS
+                or document.content_completeness != ContentCompleteness.COMPLETE
+                or not document.sections
+                or incomplete_law_articles(document)
+            )
+            if original_incomplete:
+                warnings.append("검색 메타데이터나 불완전한 원문만 저장되어 있습니다. 원문이 필요하면 공식 식별자를 확인하고 refresh=true로 다시 조회하십시오.")
             sections, next_cursor, truncated = self._page_sections(document.sections, section_index, character_offset, max_chars)
             data = document.model_dump(mode="json")
             data["sections"] = [section.model_dump(mode="json") for section in sections]
+            if document.provider == "law.go.kr" and document.document_type == "law":
+                data["temporal_status"] = TemporalStatus.UNRESOLVED.value
+            if original_incomplete and data["content_completeness"] == ContentCompleteness.COMPLETE.value:
+                data["content_completeness"] = ContentCompleteness.PARTIAL.value
             return LegalToolResponse(
                 request_id=rid,
-                status=ResponseStatus.OK,
+                status=ResponseStatus.PARTIAL if original_incomplete else ResponseStatus.OK,
                 data=data,
                 sources=[_source(document, section.locator) for section in sections] or [_source(document)],
                 warnings=warnings,
@@ -440,6 +495,14 @@ class LegalKnowledgeService:
         except (ProviderError, TransportError, ValueError, OSError) as exc:
             return self._error_response(rid, exc, provider=selected_provider)
 
+    def _selected_document(self, document_id: str, version_id: str | None) -> LegalDocument | None:
+        try:
+            return self.repository.get_document(document_id, version_id=version_id)
+        except AmbiguousDocumentVersion as exc:
+            raise ProviderError(
+                ErrorCode.TEMPORAL_UNRESOLVED, str(exc), details={"available_version_ids": exc.versions}
+            ) from exc
+
     def get_applicable_law(
         self,
         *,
@@ -447,36 +510,83 @@ class LegalKnowledgeService:
         mst: str | None = None,
         law_id: str | None = None,
         document_id: str | None = None,
+        version_id: str | None = None,
         refresh: bool = False,
     ) -> LegalToolResponse:
         rid = request_id()
         try:
             if bool(mst) == bool(law_id) and document_id is None:
                 raise ProviderError(ErrorCode.INVALID_REQUEST, "MST 또는 ID 중 하나만 제공해야 합니다.")
+            if version_id and not document_id:
+                raise ProviderError(ErrorCode.INVALID_REQUEST, "version_id에는 document_id가 필요합니다.")
             warnings: list[str] = []
             documents: list[LegalDocument] = []
             if document_id:
-                document = self.repository.get_document(document_id)
+                document = self._selected_document(document_id, version_id)
+                if version_id and document is None:
+                    raise ProviderError(ErrorCode.NOT_FOUND, "요청한 version_id의 저장 문서가 없습니다.")
                 if document:
                     documents.append(document)
             if refresh or not documents:
                 identifier = mst or law_id
+                if version_id and mst and mst != version_id:
+                    raise ProviderError(ErrorCode.INVALID_REQUEST, "mst와 version_id가 서로 다릅니다.")
+                if identifier is None and documents and version_id:
+                    selected = documents[0]
+                    upstream_ids = selected.metadata.get("upstream_identifiers") or {}
+                    known_mst = upstream_ids.get("MST") if isinstance(upstream_ids, Mapping) else None
+                    if selected.metadata.get("requested_mst") == version_id or (
+                        isinstance(known_mst, list) and version_id in known_mst
+                    ):
+                        identifier = mst = version_id
                 if identifier is None:
-                    raise ProviderError(ErrorCode.NOT_FOUND, "시점 조회에 필요한 공식 식별자가 없습니다.")
+                    # document_id를 분명히 준 사람에게 "식별자가 없다"고 하면
+                    # 무엇을 잘못했는지 알 수 없다. document_id는 우리 저장소의
+                    # 이름이라 법제처에 그대로 물을 수 없다는 것이 실제 이유다.
+                    raise ProviderError(
+                        ErrorCode.NOT_FOUND,
+                        "저장소에 그 문서가 없고, document_id만으로는 법제처에 시점 조회를 할 수 없습니다. "
+                        "search_legal_sources로 법령을 찾아 mst(일련번호) 또는 law_id(법령ID)를 확인한 뒤 그 값으로 요청하십시오."
+                        if document_id
+                        else "시점 조회에는 mst(일련번호) 또는 law_id(법령ID)가 필요합니다.",
+                        details={"provided": sorted(name for name, value in (("document_id", document_id), ("mst", mst), ("law_id", law_id)) if value)},
+                    )
+                if law_id and not mst:
+                    raise ProviderError(ErrorCode.TEMPORAL_UNRESOLVED, "법령 ID 방식은 기준일 efYd를 적용하지 않습니다. 해당 시행 버전 MST를 찾아 다시 요청하십시오.")
                 kind = "MST" if mst else "ID"
                 _, documents, _ = self._collect_detail(LegalTarget.EFFECTIVE_LAW, identifier=identifier, identifier_kind=kind, effective_on=effective_on)
-                if kind == "ID":
-                    warnings.append("ID 방식은 efYd를 무시하므로 거래일 기준 버전을 확정할 수 없습니다.")
+                if version_id and any(document.version_id != version_id for document in documents):
+                    raise ProviderError(ErrorCode.TEMPORAL_UNRESOLVED, "시점 조회 결과가 요청한 version_id와 일치하지 않습니다.")
             candidates, temporal_warnings = temporal_candidates(documents, effective_on)
             warnings.extend(temporal_warnings)
             if law_id and not mst:
                 candidates = [document.model_copy(update={"temporal_status": TemporalStatus.UNRESOLVED, "review_state": ReviewState.NEEDS_REVIEW}) for document in documents]
-            addenda_confirmed = bool(candidates) and all(any(section.kind == "addenda" and section.text.strip() for section in document.sections) for document in candidates)
+            incomplete_candidates = [
+                document
+                for document in candidates
+                if document.retrieval_status != RetrievalStatus.SUCCESS
+                or document.content_completeness != ContentCompleteness.COMPLETE
+                or bool(document.metadata.get("preview_only"))
+                or incomplete_law_articles(document)
+            ]
+            addenda_confirmed = bool(candidates) and not incomplete_candidates and all(
+                any(section.kind == "addenda" and section.text.strip() for section in document.sections)
+                for document in candidates
+            )
+            if incomplete_candidates:
+                warnings.append("완전한 원문을 확보하지 못한 후보가 있어 부칙 확인을 완료할 수 없습니다.")
             status = ResponseStatus.OK if candidates else ResponseStatus.PARTIAL
+            candidate_views = [
+                self._metadata_view(
+                    document.model_copy(update={"content_completeness": ContentCompleteness.PARTIAL})
+                    if incomplete_law_articles(document) else document
+                )
+                for document in candidates
+            ]
             return LegalToolResponse(
                 request_id=rid,
                 status=status,
-                data={"effective_on": effective_on, "candidates": [self._metadata_view(document) for document in candidates], "addenda_confirmed": addenda_confirmed, "transaction_applicability_confirmed": False},
+                data={"effective_on": effective_on, "candidates": candidate_views, "addenda_confirmed": addenda_confirmed, "transaction_applicability_confirmed": False},
                 sources=[_source(document) for document in candidates],
                 warnings=warnings,
                 coverage=Coverage(queried_providers=[self.provider.name], succeeded_providers=[self.provider.name] if candidates else [], failed_providers=[] if candidates else [self.provider.name], fetched=len(candidates)),
@@ -491,132 +601,28 @@ class LegalKnowledgeService:
         try:
             inputs = [CitationInput.model_validate(item) for item in citations]
             checks = verify_citations(inputs, self.repository.get_document)
-            mismatches = [check for check in checks if check.status.value == "mismatch"]
+            sources = []
+            for item, check in zip(inputs, checks):
+                if not check.document_exists or (check.status == CitationStatus.UNVERIFIED and check.version_id is None):
+                    continue
+                document = self.repository.get_document(item.document_id, version_id=check.version_id)
+                if document:
+                    sources.append(_source(document))
+            unresolved = [
+                check
+                for check in checks
+                if check.status in {CitationStatus.MISMATCH, CitationStatus.UNVERIFIED}
+            ]
             return LegalToolResponse(
                 request_id=rid,
-                status=ResponseStatus.PARTIAL if mismatches else ResponseStatus.OK,
+                status=ResponseStatus.PARTIAL if unresolved else ResponseStatus.OK,
                 data={"checks": [check.model_dump(mode="json") for check in checks], "legal_conclusion_verified": False},
-                sources=[_source(document) for item in inputs if (document := self.repository.get_document(item.document_id))],
+                sources=sources,
                 warnings=["인용 확인은 문서 존재·메타데이터·문구 일치 검사이며 법률 결론의 타당성 검증이 아닙니다."],
-                coverage=Coverage(queried_providers=["local-legal-index"], succeeded_providers=["local-legal-index"], fetched=len(checks), filtered=len(mismatches)),
+                coverage=Coverage(queried_providers=["local-legal-index"], succeeded_providers=["local-legal-index"], fetched=len(checks), filtered=len(unresolved)),
             )
         except (ValueError, TypeError) as exc:
             return self._error_response(rid, ProviderError(ErrorCode.INVALID_REQUEST, f"인용 입력이 올바르지 않습니다: {type(exc).__name__}"))
-
-    def research_tax_issue(
-        self,
-        *,
-        issue: str,
-        tax_type: str | None = None,
-        transaction_date: str | None = None,
-        tax_period: str | None = None,
-        jurisdiction: str = "KR",
-        research_as_of: str | None = None,
-        knowledge_cutoff: str | None = None,
-        budget: Mapping[str, int | float] | int | None = None,
-        upstream: bool = True,
-        principal_id: str = "local-stdio",
-        org_id: str = "local",
-    ) -> LegalToolResponse:
-        rid = request_id()
-        try:
-            value = _validate_issue(issue)
-            execution = run_tax_research(
-                self,
-                issue=value,
-                tax_type=tax_type,
-                transaction_date=transaction_date,
-                tax_period=tax_period,
-                jurisdiction=jurisdiction,
-                research_as_of=research_as_of,
-                knowledge_cutoff=knowledge_cutoff,
-                budget=budget,
-                upstream=upstream,
-                now=utc_now(),
-            )
-            self.report_repository.save(execution.report, principal_id=principal_id, org_id=org_id)
-            report_status = ResponseStatus.PARTIAL if execution.report.status == "partial" else ResponseStatus.OK
-            return LegalToolResponse(
-                request_id=rid,
-                status=report_status,
-                data=execution.report.model_dump(mode="json"),
-                sources=[_source(document) for document in execution.documents],
-                warnings=execution.warnings,
-                pagination=Pagination(
-                    page=1,
-                    page_size=len(execution.report.evidence_ranking),
-                    total=len(execution.report.evidence_ranking),
-                    truncated=False,
-                ),
-                coverage=Coverage(
-                    queried_providers=execution.queried_providers or ["local-legal-index"],
-                    succeeded_providers=execution.succeeded_providers or (["local-legal-index"] if execution.documents else []),
-                    failed_providers=execution.failed_providers,
-                    disabled_providers=execution.disabled_providers,
-                    fetched=len(execution.documents),
-                    truncated=bool(execution.report.unresearched_scope),
-                ),
-                freshness={"research_as_of": execution.report.research_as_of, "generated_at": execution.report.updated_at},
-            )
-        except (ProviderError, TransportError, ValueError, PermissionError, OSError, sqlite3.Error) as exc:
-            return self._error_response(rid, exc, provider="tax-research-workflow")
-
-    def get_research_report(
-        self,
-        *,
-        report_id: str,
-        cursor: str | None = None,
-        limit: int = 10,
-        principal_id: str = "local-stdio",
-        org_id: str = "local",
-    ) -> LegalToolResponse:
-        rid = request_id()
-        try:
-            if not re.fullmatch(r"research-[0-9a-f]{32}", report_id):
-                raise ProviderError(ErrorCode.INVALID_REQUEST, "report_id 형식이 올바르지 않습니다.")
-            if not 1 <= limit <= 20:
-                raise ProviderError(ErrorCode.INVALID_REQUEST, "limit는 1~20이어야 합니다.")
-            offset = _cursor_offset(cursor)
-            report = self.report_repository.get(report_id, principal_id=principal_id, org_id=org_id)
-            if report is None:
-                raise ProviderError(ErrorCode.NOT_FOUND, "조사 보고서를 찾지 못했습니다.")
-            total = len(report.evidence_ranking)
-            rankings = report.evidence_ranking[offset : offset + limit]
-            document_ids = [item.document_id for item in rankings]
-            selected_ids = set(document_ids)
-            checks = [check for check in report.citation_checks if check.document_id in selected_ids]
-            paged = report.model_copy(
-                update={
-                    "candidate_documents": document_ids,
-                    "evidence_ranking": rankings,
-                    "citation_checks": checks,
-                }
-            )
-            next_cursor = str(offset + limit) if offset + limit < total else None
-            documents = [document for document_id in document_ids if (document := self.repository.get_document(document_id)) is not None]
-            return LegalToolResponse(
-                request_id=rid,
-                status=ResponseStatus.PARTIAL if report.status == "partial" else ResponseStatus.OK,
-                data=paged.model_dump(mode="json"),
-                sources=[_source(document) for document in documents],
-                pagination=Pagination(
-                    page=(offset // limit) + 1,
-                    page_size=len(rankings),
-                    total=total,
-                    next_cursor=next_cursor,
-                    truncated=next_cursor is not None,
-                ),
-                coverage=Coverage(
-                    queried_providers=["private-research-reports"],
-                    succeeded_providers=["private-research-reports"],
-                    fetched=len(rankings),
-                    truncated=next_cursor is not None,
-                    next_cursor=next_cursor,
-                ),
-                freshness={"generated_at": report.updated_at},
-            )
-        except (ProviderError, ValueError, PermissionError, OSError, sqlite3.Error) as exc:
-            return self._error_response(rid, exc)
 
     def doctor(self) -> LegalToolResponse:
         rid = request_id()
@@ -637,26 +643,21 @@ class LegalKnowledgeService:
                     auth_valid = JwtAuthConfiguration.from_environment(required=True) is not None
                 except ValueError:
                     auth_valid = False
-            try:
-                package_version = importlib.metadata.version("taxax-legal-mcp")
-            except importlib.metadata.PackageNotFoundError:
-                package_version = "source-checkout"
             checks = {
                 "python_3_11_or_newer": sys.version_info >= (3, 11),
                 "public_legal_repository_ready": self.repository.source_status()["database_schema_version"] >= 1,
-                "private_report_repository_ready": self.report_repository.status()["database_schema_version"] >= 1,
                 "stdio_ready": True,
                 "law_go_operator_credential_configured": bool(self.provider.credential),
                 "law_go_credential_file_safe": self.provider.credential_error is None,
-                "nts_enabled_and_terms_confirmed": bool(self.nts_provider.enabled),
-                "olta_enabled_and_terms_confirmed": bool(self.olta_provider.enabled),
+                "nts_enabled": bool(self.nts_provider.enabled),
+                "olta_enabled": bool(self.olta_provider.enabled),
                 "hosted_auth_complete": auth_valid,
                 "hosted_auth_partial": 0 < auth_count < len(auth_names) or (auth_count == len(auth_names) and not auth_valid),
                 "host_allowlist_configured": bool(os.environ.get("TAXAX_MCP_ALLOWED_HOSTS", "").strip()),
                 "origin_allowlist_configured": bool(os.environ.get("TAXAX_MCP_ALLOWED_ORIGINS", "").strip()),
                 "korean_law_bridge_enabled": bool(self.bridge.enabled),
             }
-            failures = [name for name in ("python_3_11_or_newer", "public_legal_repository_ready", "private_report_repository_ready") if not checks[name]]
+            failures = [name for name in ("python_3_11_or_newer", "public_legal_repository_ready") if not checks[name]]
             warnings = [
                 "doctor는 설정과 로컬 저장소만 확인하며 공식 API·NTS·OLTA 실호출은 수행하지 않습니다.",
                 "일반 직원용 hosted 연결에서는 중앙 운영 서버만 provider credential을 보관해야 합니다.",
@@ -666,13 +667,24 @@ class LegalKnowledgeService:
             if not checks["law_go_credential_file_safe"]:
                 warnings.append("법제처 secret 파일 권한 또는 형식 검증에 실패해 credential을 사용하지 않습니다.")
             if not checks["law_go_operator_credential_configured"]:
-                warnings.append("법제처 upstream은 운영자 credential이 없어 비활성이나 offline 조회와 stdio는 사용할 수 있습니다.")
+                # 진단 도구가 "안 된다"만 말하고 끝나면 사용자는 다음에 뭘 할지 모른다.
+                warnings.append("법제처 upstream은 credential이 없어 비활성이나 offline 조회와 stdio는 사용할 수 있습니다.")
+                warnings.append(
+                    "https://open.law.go.kr 에서 OC 인증키를 무료로 발급받은 뒤 "
+                    "`taxax-legal install --oc <키>`로 등록하면 공식 원문 조회가 켜집니다. "
+                    "명령을 찾지 못하면 `python -m taxax.legal install --oc <키>`를 쓰십시오."
+                )
+            if checks["law_go_operator_credential_configured"] and self.repository.source_status()["documents"] == 0:
+                warnings.append(
+                    "로컬 법률 색인이 비어 있습니다. `taxax-legal collect-seeds`"
+                    "(또는 `python -m taxax.legal collect-seeds`)로 채우면 upstream 없이도 조회할 수 있습니다."
+                )
             return LegalToolResponse(
                 request_id=rid,
                 status=ResponseStatus.ERROR if failures else ResponseStatus.OK,
                 data={
                     "distribution": "taxax-legal-mcp",
-                    "version": package_version,
+                    "version": package_version(),
                     "checks": checks,
                     "ready": {
                         "stdio": not failures,
@@ -712,17 +724,16 @@ class LegalKnowledgeService:
                         self.olta_provider.name: self.olta_provider.capabilities(),
                     },
                     "repository": self.repository.source_status(),
-                    "private_reports": self.report_repository.status(),
                     "legacy_snapshot_records_read_only": len(legacy),
                     "legacy_snapshot_source_configured": self.legacy_snapshot_root is not None,
                     "private_knowledge_configured": self.knowledge_dir is not None,
                     "bridge": self.bridge.status(),
                     "layers": {"L1": "implemented_fixture_verified", "L2": "implemented_fixture_verified", "L3": "implemented_fixture_verified"},
-                    "operational_validation": "not_run_without_approved_operator_credential_and_terms_confirmation",
+                    "operational_validation": "not_run",
                 },
                 warnings=[
                     "fixture 검증과 공식 API 실호출·운영 배포 검증은 별도입니다.",
-                    "NTS/OLTA는 enabled와 terms confirmation이 모두 설정된 경우에만 제한 질의를 허용합니다.",
+                    "NTS/OLTA는 명시적 opt-out이 없으면 제한 질의를 사용합니다.",
                     "조사 보고서는 공개 원문 cache와 분리된 인증 scope 저장소를 사용합니다.",
                 ],
                 coverage=Coverage(
@@ -783,12 +794,12 @@ class LegalKnowledgeService:
             data={
                 "successes": successes,
                 "failures": failures,
-                "nts_seed_status": "attempted" if nts_attempted else "disabled_until_enabled_and_terms_confirmed",
+                "nts_seed_status": "attempted" if nts_attempted else "explicitly_disabled",
                 "nts_seed_count": len(NTS_SPECS),
             },
             warnings=[
                 "부칙·별표·서식 목록 확보와 실제 첨부 파일·추출 성공은 서로 다른 상태입니다.",
-                "NTS 상세 seed는 enabled와 terms confirmation이 모두 설정된 경우에만 6건으로 제한해 조회합니다.",
+                "NTS 상세 seed는 명시적으로 비활성화하지 않은 경우 6건으로 제한해 조회합니다.",
             ],
             coverage=Coverage(
                 queried_providers=queried,
@@ -1122,6 +1133,7 @@ class LegalKnowledgeService:
             issuer=item.get("issuer"),
             court=item.get("court"),
             case_no=item.get("case_no"),
+            document_number=metadata.get("document_number"),
             tax_type=item.get("tax_type"),
             promulgated_on=item.get("promulgated_on"),
             effective_from=item.get("effective_from"),
@@ -1140,7 +1152,7 @@ class LegalKnowledgeService:
             temporal_status=TemporalStatus.UNRESOLVED,
             review_state=ReviewState.NEEDS_REVIEW,
             sections=[TextSection.model_validate(section) for section in item.get("sections", [])],
-            metadata={"source_class": "supplemental", "provenance_preserved": True, **metadata},
+            metadata={"source_class": "supplemental", "provenance_preserved": True, **metadata, "snapshot_raw_sha256": snapshot.raw_sha256},
         )
 
     @staticmethod
@@ -1165,27 +1177,56 @@ class LegalKnowledgeService:
             if title_key:
                 candidates.setdefault(title_key, []).append(document)
         groups = []
-        for title_key, members in candidates.items():
-            if len(members) < 2:
-                continue
-            groups.append({
-                "group_id": "dup-" + self.repository.fingerprint({"title": title_key})[:16],
-                "match_basis": "normalized_title",
-                "members": [
-                    {
-                        "document_id": member.document_id,
-                        "provider": member.provider,
-                        "title": member.title,
-                        "case_no": member.case_no,
-                        "decided_on": member.decided_on,
-                        "raw_sha256": member.raw_sha256,
-                    }
-                    for member in members
-                ],
-                "conflicting_originals": len({member.raw_sha256 for member in members}) > 1,
-                "provenance_preserved": True,
-            })
+        for title_key, grouped in candidates.items():
+            for members in self._same_decision(grouped):
+                if len(members) < 2:
+                    continue
+                groups.append({
+                    "group_id": "dup-" + self.repository.fingerprint({"title": title_key, "case_no": members[0].case_no or ""})[:16],
+                    "match_basis": "normalized_title_and_case_no",
+                    "members": [
+                        {
+                            "document_id": member.document_id,
+                            "provider": member.provider,
+                            "title": member.title,
+                            "case_no": member.case_no,
+                            "decided_on": member.decided_on,
+                            "raw_sha256": member.raw_sha256,
+                        }
+                        for member in members
+                    ],
+                    "conflicting_originals": len({member.raw_sha256 for member in members}) > 1,
+                    "provenance_preserved": True,
+                })
         return groups
+
+    @staticmethod
+    def _same_decision(members: list[LegalDocument]) -> list[list[LegalDocument]]:
+        """제목이 같은 문서들을 사건번호로 다시 가른다.
+
+        판결문 제목은 "상속세부과처분취소"처럼 일반적이라, 제목만으로 묶으면
+        같은 사건의 1심·2심·대법원 판결이 하나의 중복 그룹이 된다. 세무사가
+        확정판결과 하급심을 같은 것으로 볼 위험이 있다. 사건번호가 다르면
+        서로 다른 결정이므로 중복이 아니다.
+
+        사건번호가 비어 있는 문서는 상세조회 전 검색 stub이거나 사건번호를
+        제공하지 않는 자료다. 같은 제목에 사건번호가 하나뿐이면 그 문서와
+        같은 건으로 본다. 둘 이상이면 어느 쪽인지 알 수 없으므로 묶지 않는다.
+        """
+        by_case: dict[str, list[LegalDocument]] = {}
+        unknown: list[LegalDocument] = []
+        for member in members:
+            case_no = (member.case_no or "").strip()
+            if case_no:
+                by_case.setdefault(case_no, []).append(member)
+            else:
+                unknown.append(member)
+        if len(by_case) == 1:
+            only = next(iter(by_case.values()))
+            return [only + unknown]
+        if not by_case:
+            return [unknown]
+        return [*by_case.values(), *([unknown] if len(unknown) > 1 else [])]
 
     def _collect_search(self, target: LegalTarget, **kwargs) -> tuple[ProviderResult, list[LegalDocument], bool]:
         run_id = kwargs.pop("run_id", None)
@@ -1201,13 +1242,17 @@ class LegalKnowledgeService:
         )
         if run["status"] == "completed":
             documents = self.repository.documents_for_run(run["run_id"])
-            empty_response = ProviderResult(target, {key: value for key, value in request.items() if key != "collection_window"}, self._cached_response(), {}, [], len(documents), kwargs.get("page", 1), kwargs.get("display", 10))
+            previous = self.repository.collection_result(run["run_id"])
+            if previous is None or "total" not in previous or "page" not in previous:
+                raise ProviderError(ErrorCode.INCOMPLETE_RESULT, "완료된 검색의 상류 페이지 정보가 없어 총 건수를 확인할 수 없습니다.")
+            empty_response = ProviderResult(target, {key: value for key, value in request.items() if key != "collection_window"}, self._cached_response(), {}, [], previous["total"], previous["page"], kwargs.get("display", 10))
             return empty_response, documents, True
         if not run["claimed"]:
             raise ProviderError(ErrorCode.UPSTREAM_UNAVAILABLE, "같은 수집 요청이 이미 실행 중입니다.", retryable=True)
         try:
             result = self.provider.search(target, **kwargs)
             documents = self._persist_result(result, run["run_id"], started)
+            self.repository.save_collection_result(run["run_id"], {"total": result.total, "page": result.page})
             self.repository.finish_run(run["run_id"], status="completed", finished_at=utc_now())
             self.snapshots.save_run_manifest(run["run_id"], {"run_id": run["run_id"], "status": "completed", "request": result.request_parameters, "document_ids": [document.document_id for document in documents]})
             return result, documents, False
@@ -1218,7 +1263,7 @@ class LegalKnowledgeService:
 
     def _collect_detail(self, target: LegalTarget, **kwargs) -> tuple[ProviderResult, list[LegalDocument], bool]:
         run_id = kwargs.pop("run_id", None)
-        request = {"target": target.value, **kwargs, "collection_window": utc_now()[:10]}
+        request = {"target": target.value, **kwargs, "parser_version": PARSER_VERSION, "collection_window": utc_now()[:10]}
         started = utc_now()
         run = self.repository.start_run(
             provider=self.provider.name,
@@ -1247,9 +1292,16 @@ class LegalKnowledgeService:
 
     def _persist_result(self, result: ProviderResult, run_id: str, retrieved_at: str) -> list[LegalDocument]:
         section_counts = [bool(item.get("sections")) for item in result.items]
+        full_sections = [
+            bool(item.get("sections")) and not (
+                result.target in {LegalTarget.LAW, LegalTarget.EFFECTIVE_LAW}
+                and any(heading_only_article(section["text"]) for section in item["sections"] if section["kind"] == "articles")
+            )
+            for item in result.items
+        ]
         completeness = (
             ContentCompleteness.COMPLETE
-            if section_counts and all(section_counts)
+            if full_sections and all(full_sections)
             else ContentCompleteness.PARTIAL
             if any(section_counts)
             else ContentCompleteness.METADATA_ONLY
@@ -1271,6 +1323,42 @@ class LegalKnowledgeService:
         return documents
 
     @staticmethod
+    def _unapplied_filter_warnings(filters: Mapping[str, str] | None) -> list[str]:
+        """filters는 upstream 검색에만 전달된다. 로컬 색인에는 적용되지 않는다.
+
+        upstream 경로는 지원하지 않는 필터를 INVALID_REQUEST로 거부하지만,
+        로컬 경로는 값을 받아놓고 아무 데도 쓰지 않은 채 결과를 돌려줬다.
+        지정한 쪽에서는 걸러진 결과를 보고 있다고 오해하게 된다. 받아놓고
+        조용히 무시하는 것이 가장 나쁘다.
+        """
+        if not filters:
+            return []
+        return [
+            f"filters({', '.join(sorted(filters))})는 upstream 검색에만 적용됩니다. "
+            "로컬 색인 검색 결과에는 반영되지 않았습니다. 적용하려면 upstream=true로 요청하십시오."
+        ]
+
+    def _empty_index_warnings(self, total: int) -> list[str]:
+        """로컬 색인이 비어서 0건인 경우와 검색어가 안 맞아 0건인 경우를 구분해 알린다.
+
+        upstream 기본값이 false라서, 갓 설치한 사용자는 무엇을 검색하든 이
+        경로로 들어와 0건을 받는다. 그때 status=ok에 warning이 하나도 없으면
+        호출하는 LLM은 "그런 법령은 없습니다"라고 단정하게 된다. 아직 아무것도
+        수집하지 않았다는 사실과 다음에 할 일을 응답 자체에 담아야 한다.
+        """
+        if total != 0:
+            return []
+        try:
+            if self.repository.source_status()["documents"] != 0:
+                return []
+        except (sqlite3.Error, OSError):
+            return []
+        return [
+            "로컬 법률 색인이 비어 있어 0건입니다. 해당 법령이 없다는 뜻이 아니라 아직 수집하지 않은 상태입니다.",
+            "공식 원문은 upstream=true로 요청하거나, taxax-legal collect-seeds로 색인을 먼저 채운 뒤 조회하십시오.",
+        ]
+
+    @staticmethod
     def _item_content_hash(item: Mapping[str, Any]) -> str:
         """개별 문서 항목 자체의 내용 해시.
 
@@ -1288,8 +1376,15 @@ class LegalKnowledgeService:
             self.provider.name,
             item.get("official_url") or LawGoProvider.detail_url(target, source_id),
         )
-        temporal = TemporalStatus.CURRENT if target == LegalTarget.LAW else TemporalStatus.HISTORICAL if target == LegalTarget.EFFECTIVE_LAW else TemporalStatus.UNRESOLVED
+        temporal = TemporalStatus.UNRESOLVED
         content_hash = self._item_content_hash(item)
+        metadata = dict(item.get("metadata") or {})
+        upstream_ids = metadata.get("upstream_identifiers") or {}
+        mst = metadata.get("requested_mst") or (
+            item.get("version_id")
+            if isinstance(upstream_ids, Mapping) and item.get("version_id") in upstream_ids.get("MST", [])
+            else None
+        )
         return LegalDocument(
             provider=self.provider.name,
             document_type=CONTRACTS[target].document_type,
@@ -1307,6 +1402,9 @@ class LegalKnowledgeService:
             registered_at=item.get("registered_at"),
             retrieved_at=retrieved_at,
             official_url=official_url,
+            version_url=(f"https://www.law.go.kr/LSW/lsInfoP.do?lsiSeq={mst}"
+                         if target in {LegalTarget.LAW, LegalTarget.EFFECTIVE_LAW}
+                         and isinstance(mst, str) and mst.isdigit() else None),
             raw_sha256=content_hash,
             normalized_sha256=content_hash,
             snapshot_ref=snapshot.snapshot_ref,
@@ -1316,7 +1414,7 @@ class LegalKnowledgeService:
             temporal_status=temporal,
             review_state=ReviewState.UNREVIEWED,
             sections=[TextSection.model_validate(section) for section in item.get("sections", [])],
-            metadata={"target": target.value, "official_guide": LawGoProvider.guide_url(target), **dict(item.get("metadata") or {})},
+            metadata={"target": target.value, "official_guide": LawGoProvider.guide_url(target), **metadata, "snapshot_raw_sha256": snapshot.raw_sha256},
         )
 
     @staticmethod
@@ -1365,16 +1463,21 @@ class LegalKnowledgeService:
             "issuer": document.issuer,
             "court": document.court,
             "case_no": document.case_no,
+            "document_number": document.document_number,
             "promulgated_on": document.promulgated_on,
             "effective_from": document.effective_from,
             "decided_on": document.decided_on,
             "interpreted_on": document.interpreted_on,
             "retrieved_at": document.retrieved_at,
             "content_completeness": document.content_completeness.value,
-            "temporal_status": document.temporal_status.value,
+            "temporal_status": (TemporalStatus.UNRESOLVED.value
+                                if document.provider == "law.go.kr" and document.document_type == "law"
+                                and document.temporal_status == TemporalStatus.CURRENT
+                                else document.temporal_status.value),
             "citation_status": document.citation_status.value,
             "review_state": document.review_state.value,
             "official_url": document.official_url,
+            "version_url": document.version_url,
         }
 
     @staticmethod

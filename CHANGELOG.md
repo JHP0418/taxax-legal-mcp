@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.9 - 2026-09-15
+
+배포 파이프라인이 실제로 통과하도록 환경 의존성과 버전 관리 방식을 정리했습니다.
+
+- **PSModulePath가 바뀐 환경에서 credential 저장·설정 병합이 전부 실패하던
+  문제**: Windows ACL 스크립트가 `Get-Acl` 커맨드릿을 쓰는데, 이 커맨드릿은
+  `Microsoft.PowerShell.Security` 모듈에 들어 있어서 PSModulePath를 pwsh용
+  경로로 덮어쓴 환경에서는 "module could not be loaded"로 죽는다. 이 상태에서는
+  설치, Claude Desktop/Code/Codex 등록, secret 읽기·쓰기가 모두 막힌다(CI의
+  Windows job에서 24개 테스트 실패로 드러남). 같은 파일이 `Set-Acl`에 대해
+  이미 쓰던 우회 방식대로, 5곳 모두 FileInfo/DirectoryInfo의
+  `GetAccessControl()` 메서드로 바꿔 모듈 의존을 없앴다
+- **버전 문자열이 파일마다 따로 박혀 어긋나던 문제**: Dockerfile은 `==0.2.0`을
+  고정해 둔 탓에 컨테이너 빌드가 깨져 있었고, MCP 서버는 클라이언트에 계속
+  0.2.0을 광고했으며, Windows 설치기는 0.2.0, 설치 경로 상수는 0.2.1이었다.
+  이제 `taxax.legal.version.package_version()` 한 곳에서만 읽는다
+
 ## 0.2.8 - 2026-09-15
 
 외부 스트레스 테스트 리포트를 항목별로 재현 검증하며 남은 데이터 무결성 문제를

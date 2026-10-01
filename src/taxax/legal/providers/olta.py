@@ -7,11 +7,12 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import date
 from html.parser import HTMLParser
-from typing import Any, Callable, Mapping
+from typing import Any, Callable
 from urllib.parse import urlencode
 
 from ..models import ErrorCode
-from ..transport import HttpResponse, SessionHttpTransport, TransportError, decode_body
+from ..transport import HttpResponse, SessionHttpTransport, decode_body
+from ..router import infer_tax_type
 from .base import ProviderError, SupplementalResult
 
 BASE_URL = "https://olta.re.kr"
@@ -189,6 +190,16 @@ def _listing_after_heading(heading: _Node) -> _Node | None:
     return None
 
 
+def _is_search_page(text: str) -> bool:
+    """결과가 없어도 남아 있는 category 안내 문구로 검색 화면인지 확인한다.
+
+    실측으로 결과 0건 응답에도 일곱 개 기관명이 모두 페이지에 남아 있다.
+    과반이 보이면 우리가 아는 검색 화면으로 본다.
+    """
+    present = sum(1 for label, _, _ in CATEGORIES.values() if label.split()[0] in text)
+    return present >= (len(CATEGORIES) + 1) // 2
+
+
 def parse_search_html(response: HttpResponse) -> tuple[list[dict[str, Any]], dict[str, int]]:
     text = decode_body(response)
     lowered = text[:2048].lower()
@@ -200,6 +211,15 @@ def parse_search_html(response: HttpResponse) -> tuple[list[dict[str, Any]], dic
     parser.feed(text)
     headings = _find_all(parser.root, tag="p", class_name="se_title")
     if not headings:
+        # 검색 결과가 하나도 없으면 category heading도 없다. 그때마다 "구조가
+        # 변경됐다"고 하면, 지방세 심판례가 없는 국세 주제를 물었을 뿐인데
+        # 시스템이 고장난 것처럼 보인다. 실제로 "가업상속공제 사후관리 위반"은
+        # 85KB짜리 멀쩡한 페이지를 받고도 이 오류가 났다.
+        # category 안내 문구는 결과 유무와 무관하게 남아 있으므로, 그것으로
+        # "검색 페이지는 맞다"를 확인하고 0건으로 돌려준다. 그 문구마저 없으면
+        # 그때는 정말 우리가 모르는 화면이므로 기존대로 실패시킨다.
+        if _is_search_page(text):
+            return [], {}
         raise ProviderError(ErrorCode.INCOMPLETE_RESULT, "OLTA category heading 구조가 변경됐습니다.")
     items: list[dict[str, Any]] = []
     totals: dict[str, int] = {}
@@ -244,15 +264,41 @@ def parse_search_html(response: HttpResponse) -> tuple[list[dict[str, Any]], dic
             sections = []
             if summary:
                 sections.append({"section_id": "summary-1", "kind": "summary", "heading": "검색 요약", "locator": "search-result", "text": summary, "derived": False, "source_field": "p.txt"})
+            # 상세 endpoint가 확인된 유형은 검색 단계에서도 원문 주소를 만들 수
+            # 있다. 상세조회를 해야만 링크가 생기면, 검색 결과만 받아 본 쪽은
+            # 출처를 가리킬 방법이 없어 "근거는 있는데 어디서 왔는지 모르는"
+            # 인용이 된다. 주소 규칙은 _detail()이 쓰는 것과 같다.
+            official_url = (
+                BASE_URL + DETAIL_PATHS[category] + "?" + urlencode({"num": source_id})
+                if category in DETAIL_PATHS and not source_id.startswith("preview-")
+                else None
+            )
+            # OLTA는 지방세 연구 포털이지만 법원판례·헌재결정례 섹션에는 국세
+            # 사건도 색인한다. 출처만 보고 "지방세"라고 적으면 상속세 대법원
+            # 판결(2007두16493 등)이 지방세 자료로 표시된다. 실제로 그렇게
+            # 나가고 있었다. 세목은 제목에서 읽히는 경우에만 단정하고, 못 읽으면
+            # unknown으로 남긴다. 모르는 것을 "지방세"로 채우지 않는다.
+            declared_tax_type = _text(_first(row, class_name="part")) if _first(row, class_name="part") else None
+            title_tax_type, title_scope = infer_tax_type(f"{title} {doc_no or ''}")
+            declared_name, declared_scope = infer_tax_type(declared_tax_type or "")
+            if declared_name:
+                # OLTA가 세목을 분명히 적어 준 경우. 제목 추론보다 이쪽이 낫다.
+                tax_type, tax_scope = declared_name, declared_scope
+            else:
+                # OLTA는 국세 사건에 "기타"라고만 적는다. 아무 정보도 아니므로
+                # 제목에서 읽는다. 그마저 안 읽히면 표기를 그대로 두고 scope는
+                # unknown으로 남긴다.
+                tax_type, tax_scope = title_tax_type or declared_tax_type, title_scope
             items.append(
                 {
                     "source_document_id": source_id,
                     "title": title,
                     "document_type": DOCUMENT_TYPES[category],
                     "issuer": CATEGORIES[category][0],
+                    "official_url": official_url,
                     "case_no": doc_no or None,
                     "decided_on": normalized_date,
-                    "tax_type": _text(_first(row, class_name="part")) if _first(row, class_name="part") else None,
+                    "tax_type": tax_type,
                     "sections": sections,
                     "metadata": {
                         "category": category,
@@ -262,7 +308,8 @@ def parse_search_html(response: HttpResponse) -> tuple[list[dict[str, Any]], dic
                         "preview_only": True,
                         "detail_supported": category in DETAIL_PATHS,
                         "derived_source_id": not bool(identifiers),
-                        "tax_scope": "local",
+                        "tax_scope": tax_scope,
+                        "source_portal_scope": "local",
                         "raw_response_index": 0,
                         "parser_version": PARSER_VERSION,
                     },
@@ -327,11 +374,11 @@ class OltaProvider:
         cache_ttl_seconds: float = 300.0,
         clock: Callable[[], float] = time.monotonic,
     ):
-        requested = os.environ.get("TAXAX_OLTA_ENABLED") == "1" if enabled is None else enabled
-        accepted = os.environ.get("TAXAX_OLTA_TERMS_CONFIRMED") == "1" if terms_confirmed is None else terms_confirmed
-        self.enabled = bool(requested and accepted)
-        self.requested = bool(requested)
-        self.terms_confirmed = bool(accepted)
+        self.enabled = (
+            os.environ.get("TAXAX_OLTA_ENABLED", "").strip() != "0"
+            if enabled is None
+            else bool(enabled)
+        )
         self.transport = transport or SessionHttpTransport("olta.re.kr", min_interval_seconds=1.0)
         self.cache_ttl_seconds = cache_ttl_seconds
         self.clock = clock
@@ -344,7 +391,6 @@ class OltaProvider:
             "implemented": True,
             "fixture_verified": True,
             "enabled": self.enabled,
-            "terms_confirmed": self.terms_confirmed,
             "limited_query_only": True,
             "bulk_collection": False,
             "categories": {key: {"label": value[0], "code": value[1], "collection": value[2], "detail": key in DETAIL_PATHS} for key, value in CATEGORIES.items()},
@@ -383,7 +429,7 @@ class OltaProvider:
         cached = self._cache.get(key)
         if cached and self.clock() - cached[0] <= self.cache_ttl_seconds:
             return replace(cached[1], warnings=(*cached[1].warnings, "동일 검색 cache를 재사용했습니다."))
-        result = self._with_one_reset(lambda: self._search(request_parameters, start, end))
+        result = self._search(request_parameters, start, end)
         self._cache[key] = (self.clock(), result)
         return result
 
@@ -441,7 +487,7 @@ class OltaProvider:
             raise ProviderError(ErrorCode.POLICY_DISABLED, "이 OLTA 유형은 확인된 상세 endpoint가 없어 검색 요약만 제공합니다.")
         if not re.fullmatch(r"\d{6,20}", document_id):
             raise ProviderError(ErrorCode.INVALID_REQUEST, "OLTA 상세 문서 ID 형식이 올바르지 않습니다.")
-        return self._with_one_reset(lambda: self._detail(category, document_id))
+        return self._detail(category, document_id)
 
     def _detail(self, category: str, document_id: str) -> SupplementalResult:
         url = BASE_URL + DETAIL_PATHS[category] + "?" + urlencode({"num": document_id})
@@ -479,14 +525,6 @@ class OltaProvider:
             raise ProviderError(ErrorCode.INCOMPLETE_RESULT, "OLTA 공개 세션 초기화 화면이 변경됐습니다.")
         self._bootstrapped = True
 
-    def _with_one_reset(self, operation):
-        try:
-            return operation()
-        except (ProviderError, TransportError):
-            self.transport.reset()
-            self._bootstrapped = False
-            return operation()
-
     @staticmethod
     def _compact_date(value: str | None) -> str | None:
         if not value:
@@ -502,5 +540,7 @@ class OltaProvider:
 
     def _require_enabled(self) -> None:
         if not self.enabled:
-            reason = "이용조건 확인이 필요합니다." if self.requested and not self.terms_confirmed else "운영 정책에서 비활성 상태입니다."
-            raise ProviderError(ErrorCode.POLICY_DISABLED, f"OLTA 보완 adapter는 {reason}")
+            raise ProviderError(
+                ErrorCode.POLICY_DISABLED,
+                "OLTA 보완 adapter는 운영 설정에서 비활성 상태입니다.",
+            )

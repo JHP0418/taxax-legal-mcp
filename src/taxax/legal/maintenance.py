@@ -14,7 +14,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 _BACKUP_FORMAT = "taxax-legal-backup-v1"
-_DATABASES = (Path("v1/legal.sqlite3"), Path("private/v1/reports.sqlite3"))
+_DATABASES = (Path("v1/legal.sqlite3"),)
+_LEGACY_REPORT_DATABASE = Path("private/v1/reports.sqlite3")
 _DATA_DIRECTORIES = (Path("v1/raw"), Path("v1/extracted"), Path("v1/runs"))
 _MAX_RESTORE_BYTES = 8 * 1024 * 1024 * 1024
 _WINDOWS_INVALID_CHARACTERS = frozenset('<>:"|?*')
@@ -159,6 +160,8 @@ def create_backup(data_dir: Path, archive_path: Path) -> dict[str, Any]:
         staged.mkdir()
         for relative in _DATABASES:
             _backup_database(source_root / relative, staged / relative)
+        if (source_root / _LEGACY_REPORT_DATABASE).is_file():
+            _backup_database(source_root / _LEGACY_REPORT_DATABASE, staged / _LEGACY_REPORT_DATABASE)
         for relative in _DATA_DIRECTORIES:
             _copy_data_tree(source_root / relative, staged / relative)
 
@@ -267,6 +270,8 @@ def _validate_manifest(staged: Path, members: dict[str, zipfile.ZipInfo]) -> dic
         if relative.as_posix() not in expected:
             raise MaintenanceError("backup에 필수 SQLite database가 없습니다.")
         _validate_database(staged / relative)
+    if _LEGACY_REPORT_DATABASE.as_posix() in expected:
+        _validate_database(staged / _LEGACY_REPORT_DATABASE)
     return manifest
 
 
@@ -306,4 +311,75 @@ def restore_backup(archive_path: Path, destination_dir: Path) -> dict[str, Any]:
         "files": len(manifest["files"]),
         "created_at": manifest.get("created_at"),
         "restored_to": destination.name,
+    }
+
+
+# 저장된 문서는 수집 당시의 파서가 만든 결과다. 파서를 고쳐도 이미 들어온
+# 문서는 그대로 남는다. 실제로 NTS 검색 응답의 <!HS>/<!HE> 하이라이트 태그를
+# 벗기는 수정을 한 뒤에도, 그 전에 수집된 56건은 제목과 본문에 태그를 단 채
+# 색인에 남아 사용자에게 제공됐다. 원본 응답은 스냅샷으로 보존돼 있고 거기에는
+# 그 태그가 실제로 들어 있으므로, 출처 기록은 손대지 않고 파생된 문서만 현재
+# 파서 기준으로 다시 정규화한다.
+_TEXT_NORMALIZERS: dict[str, Any] = {}
+
+
+def _normalizer_for(provider: str):
+    if not _TEXT_NORMALIZERS:
+        from .providers.nts import strip_highlight_markup
+
+        _TEXT_NORMALIZERS["taxlaw.nts.go.kr"] = strip_highlight_markup
+    return _TEXT_NORMALIZERS.get(provider)
+
+
+def renormalize_documents(database_path: Path, *, apply: bool = False) -> dict[str, Any]:
+    """저장된 문서를 현재 파서 기준으로 다시 정규화한다.
+
+    기본은 검사만 하고 바꾸지 않는다(apply=False). 실제로 고칠 때만 apply를
+    준다. 원본 스냅샷과 수집 이력은 건드리지 않는다.
+    """
+    changed: list[str] = []
+    scanned = 0
+    connection = sqlite3.connect(database_path)
+    connection.row_factory = sqlite3.Row
+    try:
+        rows = connection.execute(
+            "SELECT record_id, provider, title, searchable_text, document_json FROM legal_documents"
+        ).fetchall()
+        for row in rows:
+            normalize = _normalizer_for(row["provider"])
+            if normalize is None:
+                continue
+            scanned += 1
+            document = json.loads(row["document_json"])
+            before = json.dumps(document, ensure_ascii=False, sort_keys=True)
+            document["title"] = normalize(document.get("title") or "")
+            for section in document.get("sections") or []:
+                if isinstance(section.get("text"), str):
+                    section["text"] = normalize(section["text"])
+                if isinstance(section.get("heading"), str):
+                    section["heading"] = normalize(section["heading"])
+            after = json.dumps(document, ensure_ascii=False, sort_keys=True)
+            if before == after:
+                continue
+            changed.append(document.get("document_id") or str(row["record_id"]))
+            if apply:
+                connection.execute(
+                    "UPDATE legal_documents SET title = ?, searchable_text = ?, document_json = ? WHERE record_id = ?",
+                    (
+                        document["title"],
+                        normalize(row["searchable_text"] or ""),
+                        after,
+                        row["record_id"],
+                    ),
+                )
+        if apply and changed:
+            connection.commit()
+    finally:
+        connection.close()
+    return {
+        "status": "ok",
+        "scanned": scanned,
+        "changed": len(changed),
+        "applied": bool(apply and changed),
+        "document_ids": changed[:20],
     }

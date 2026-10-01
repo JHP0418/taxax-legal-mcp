@@ -62,7 +62,7 @@ def _source_modules() -> set[str]:
 
 
 def _source_tests() -> set[str]:
-    paths = list((_ROOT / "tests").glob("test_legal_*.py"))
+    paths = [path for path in (_ROOT / "tests").glob("test_legal_*.py") if path.name != "test_legal_claude_e2e.py"]
     paths.extend(path for path in (_ROOT / "tests" / "legal_fixtures").rglob("*") if path.is_file())
     return {path.relative_to(_ROOT).as_posix() for path in paths}
 

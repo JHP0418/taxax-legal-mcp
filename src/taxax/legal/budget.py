@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
+import os
+import threading
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Iterator
 
 
@@ -47,6 +51,69 @@ class RemoteRequestBudget:
 
 
 _ACTIVE_BUDGET: ContextVar[RemoteRequestBudget | None] = ContextVar("taxax_legal_remote_budget", default=None)
+_E2E_PROCESS_LOCK = threading.Lock()
+_E2E_PROCESS_CONFIG: tuple[str, str] | None = None
+_E2E_PROCESS_CONSUMED = 0
+
+
+def _write_e2e_audit(path_value: str, *, limit: int, exhausted: bool) -> None:
+    if not path_value:
+        return
+    path = Path(path_value)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f"{path.name}.tmp")
+        temporary.write_text(
+            json.dumps(
+                {
+                    "limit": limit,
+                    "attempted": _E2E_PROCESS_CONSUMED,
+                    "exhausted": exhausted,
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+    except OSError:
+        return
+
+
+def _consume_e2e_process_budget() -> None:
+    global _E2E_PROCESS_CONFIG, _E2E_PROCESS_CONSUMED
+    raw_limit = os.environ.get("TAXAX_E2E_MAX_REMOTE_REQUESTS", "").strip()
+    audit_path = os.environ.get("TAXAX_E2E_REMOTE_AUDIT_FILE", "").strip()
+    config = (raw_limit, audit_path)
+    with _E2E_PROCESS_LOCK:
+        if config != _E2E_PROCESS_CONFIG:
+            _E2E_PROCESS_CONFIG = config
+            _E2E_PROCESS_CONSUMED = 0
+        if not raw_limit:
+            return
+        try:
+            limit = int(raw_limit)
+        except ValueError:
+            raise RemoteBudgetExceeded(
+                "E2E 원격 요청 상한 설정이 올바르지 않습니다."
+            ) from None
+        if limit < 0:
+            raise RemoteBudgetExceeded(
+                "E2E 원격 요청 상한은 0 이상이어야 합니다."
+            )
+        if _E2E_PROCESS_CONSUMED >= limit:
+            _write_e2e_audit(
+                audit_path,
+                limit=limit,
+                exhausted=True,
+            )
+            raise RemoteBudgetExceeded("E2E 원격 요청 상한에 도달했습니다.")
+        _E2E_PROCESS_CONSUMED += 1
+        _write_e2e_audit(
+            audit_path,
+            limit=limit,
+            exhausted=False,
+        )
 
 
 @contextmanager
@@ -62,6 +129,7 @@ def consume_remote_request() -> None:
     budget = _ACTIVE_BUDGET.get()
     if budget is not None:
         budget.consume()
+    _consume_e2e_process_budget()
 
 
 def check_remote_time() -> None:

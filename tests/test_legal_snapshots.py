@@ -6,7 +6,14 @@ import threading
 import unittest
 from pathlib import Path
 
-from taxax.legal.models import ContentCompleteness
+from taxax.legal.maintenance import renormalize_documents
+from taxax.legal.models import (
+    ContentCompleteness,
+    LegalDocument,
+    RetrievalStatus,
+    SourceSnapshot,
+    TextSection,
+)
 from taxax.legal.providers.law_go import PARSER_VERSION
 from taxax.legal.repository import LegalRepository
 from taxax.legal.snapshots import SnapshotStore, sha256_bytes, write_once
@@ -41,7 +48,7 @@ class SnapshotStoreTests(unittest.TestCase):
                 run_id="run-1",
                 completeness=ContentCompleteness.COMPLETE,
             )
-            extraction = store.reextract(snapshot.snapshot_ref, parsed={"law": "reparsed"}, parser_version="law-go-v2")
+            extraction = store.reextract(snapshot.snapshot_ref, parsed={"law": "reparsed"}, parser_version=f"{PARSER_VERSION}-reextract")
             self.assertEqual(snapshot.raw_sha256, second.raw_sha256)
             self.assertEqual(raw_path.read_bytes(), before)
             self.assertEqual(sha256_bytes(before), snapshot.raw_sha256)
@@ -208,6 +215,155 @@ class RepositoryRunTests(unittest.TestCase):
             content = (root / reference).read_text(encoding="utf-8")
             self.assertNotIn("OC", content)
             self.assertEqual(json.loads(content)["request"]["query"], "민법")
+
+
+class RenormalizeTests(unittest.TestCase):
+    """파서를 고쳐도 이미 들어온 문서는 그대로 남던 문제.
+
+    NTS 검색 응답의 <!HS>/<!HE> 하이라이트 태그를 벗기는 수정을 한 뒤에도,
+    그 전에 수집된 56건은 제목과 본문에 태그를 단 채 색인에 남아 사용자에게
+    제공됐다. 원본 스냅샷은 보존돼 있고 거기에는 그 태그가 실제로 들어 있으니
+    출처 기록은 손대지 않고 파생된 문서만 현재 파서 기준으로 다시 정규화한다.
+    """
+
+    def _seed(self, database_path: Path, title: str, body: str) -> None:
+        repository = LegalRepository(database_path)
+        repository.start_run(
+            provider="taxlaw.nts.go.kr",
+            action="search",
+            request={"query": "seed"},
+            started_at="2026-09-15T00:00:00Z",
+            run_id="run-seed",
+        )
+        snapshot = SourceSnapshot(
+            snapshot_id="snap-1",
+            provider="taxlaw.nts.go.kr",
+            source_document_id="1",
+            raw_sha256="0" * 64,
+            snapshot_ref="ref/seed",
+            parser_version="nts-taxlaw-v1",
+            retrieved_at="2026-09-15T00:00:00Z",
+            retrieval_status=RetrievalStatus.SUCCESS,
+            content_completeness=ContentCompleteness.COMPLETE,
+            run_id="run-seed",
+            byte_length=1,
+        )
+        repository.save_result(
+            snapshot,
+            [
+                LegalDocument(
+                    provider="taxlaw.nts.go.kr",
+                    document_type="nts_interpretation",
+                    source_document_id="1",
+                    document_id="taxlaw.nts.go.kr:nts_interpretation:1",
+                    title=title,
+                    retrieved_at="2026-09-15T00:00:00Z",
+                    snapshot_ref="ref/seed",
+                    parser_version="nts-taxlaw-v1",
+                    collection_run_id="run-seed",
+                    raw_sha256="0" * 64,
+                    sections=[TextSection(section_id="s1", kind="body", text=body)],
+                )
+            ],
+        )
+
+    def test_stored_markup_is_cleaned_only_when_apply_is_given(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "legal.sqlite3"
+            self._seed(
+                database_path,
+                "<!HS>주식<!HE>을 <!HS>명의<!HE>신탁한 경우",
+                "쟁점<!HS>주식<!HE>의 귀속",
+            )
+
+            dry = renormalize_documents(database_path)
+            self.assertEqual(dry["changed"], 1)
+            self.assertFalse(dry["applied"], "검사만 요청했는데 데이터를 고쳤습니다.")
+            stored = LegalRepository(database_path).get_document("taxlaw.nts.go.kr:nts_interpretation:1")
+            self.assertIn("<!HS>", stored.title, "검사 단계에서 원본이 변경됐습니다.")
+
+            applied = renormalize_documents(database_path, apply=True)
+            self.assertEqual(applied["changed"], 1)
+            self.assertTrue(applied["applied"])
+            cleaned = LegalRepository(database_path).get_document("taxlaw.nts.go.kr:nts_interpretation:1")
+            self.assertEqual(cleaned.title, "주식을 명의신탁한 경우")
+            self.assertEqual(cleaned.sections[0].text, "쟁점주식의 귀속")
+
+            # 이미 깨끗하면 두 번째 실행은 아무것도 바꾸지 않아야 한다.
+            again = renormalize_documents(database_path, apply=True)
+            self.assertEqual(again["changed"], 0)
+
+
+class PreviewShadowingTests(unittest.TestCase):
+    """검색 미리보기가 먼저 받아둔 원문을 가리던 문제.
+
+    같은 document_id가 검색 미리보기와 상세 원문으로 각각 저장된다. 내용이
+    다르니 해시도 다른 것이 맞다. 그런데 조회가 최신순으로만 고르면 나중에
+    수집된 미리보기가 원문을 가린다. 실제 색인에서 10,137자짜리 헌재결정문이
+    108자 요약에 가려져 있었다. 세무사가 같은 문서를 인용해도 조회 시점에
+    따라 본문 대신 요약 한 줄을 받게 된다.
+    """
+
+    def test_the_full_text_wins_over_a_later_preview(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "legal.sqlite3"
+            repository = LegalRepository(database_path)
+            repository.start_run(
+                provider="olta.re.kr",
+                action="search",
+                request={"query": "seed"},
+                started_at="2026-09-15T00:00:00Z",
+                run_id="run-seed",
+            )
+
+            def snapshot(snapshot_id: str, sha: str) -> SourceSnapshot:
+                return SourceSnapshot(
+                    snapshot_id=snapshot_id,
+                    provider="olta.re.kr",
+                    source_document_id="60074132",
+                    raw_sha256=sha,
+                    snapshot_ref=f"ref/{snapshot_id}",
+                    parser_version="olta-v1",
+                    retrieved_at="2026-09-15T00:00:00Z",
+                    retrieval_status=RetrievalStatus.SUCCESS,
+                    content_completeness=ContentCompleteness.COMPLETE,
+                    run_id="run-seed",
+                    byte_length=1,
+                )
+
+            def document(text: str, *, preview: bool, retrieved_at: str, sha: str):
+                return LegalDocument(
+                    provider="olta.re.kr",
+                    document_type="local_tax_constitutional_decision",
+                    source_document_id="60074132",
+                    document_id="olta.re.kr:local_tax_constitutional_decision:60074132",
+                    title="헌재 결정",
+                    retrieved_at=retrieved_at,
+                    snapshot_ref="ref/x",
+                    parser_version="olta-v1",
+                    collection_run_id="run-seed",
+                    raw_sha256=sha,
+                    content_completeness=ContentCompleteness.PARTIAL if preview else ContentCompleteness.COMPLETE,
+                    metadata={"preview_only": preview},
+                    sections=[TextSection(section_id="s1", kind="body", text=text)],
+                )
+
+            # 원문을 먼저 받고, 그 뒤에 검색 미리보기가 들어온다.
+            repository.save_result(
+                snapshot("snap-full", "1" * 64),
+                [document("원" * 5000, preview=False, retrieved_at="2026-09-15T01:00:00Z", sha="1" * 64)],
+            )
+            repository.save_result(
+                snapshot("snap-preview", "2" * 64),
+                [document("요약", preview=True, retrieved_at="2026-09-15T02:00:00Z", sha="2" * 64)],
+            )
+
+            found = repository.get_document("olta.re.kr:local_tax_constitutional_decision:60074132")
+            self.assertFalse(
+                bool(found.metadata.get("preview_only")),
+                "나중에 들어온 미리보기가 원문을 가렸습니다.",
+            )
+            self.assertEqual(len(found.sections[0].text), 5000)
 
 
 if __name__ == "__main__":

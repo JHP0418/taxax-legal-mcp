@@ -6,7 +6,7 @@
 
 - `src/taxax/legal/**/*.py`
 - `src/taxax/mcp/**/*.py`
-- `tests/test_legal_*.py`
+- `tests/test_legal_*.py` (아래 제외 항목 제외)
 - `tests/legal_fixtures/**`
 - `pyproject.toml`, `requirements.lock`, `MANIFEST.in`
 - `README.md`, `CHANGELOG.md`, `LICENSE`, `THIRD_PARTY_NOTICES.md`
@@ -25,6 +25,7 @@
 - 회계 `engine.py`, `storage.py`, `orchestration.py`, `canonical.py`, `ingest.py`, `export.py`
 - `src/taxax/adapters/**`, root `adapters/**`
 - 회계 tests와 fixtures
+- `tests/test_legal_claude_e2e.py`와 그 비공개 캠페인 스크립트 의존성 `scripts/run_legal_claude_e2e.py`
 - private roadmap/status/development log/강의 문서
 - 실제 TAXax `src/taxax/__init__.py`
 - 기존 대량 수집 script

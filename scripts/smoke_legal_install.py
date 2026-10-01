@@ -112,7 +112,6 @@ def smoke_install(distribution: Path) -> dict[str, object]:
         demo = json.loads(_run([str(legal_cli), "demo"], cwd=scratch, environment=environment))
         if not demo["data"]["demo"]["synthetic"]:
             raise RuntimeError("offline demo가 합성 자료로 표시되지 않았습니다.")
-        report_id = demo["data"]["report_id"]
         document_id = "fixture:law:corporate-tax-bad-debt-v1"
         detail = json.loads(
             _run(
@@ -123,11 +122,11 @@ def smoke_install(distribution: Path) -> dict[str, object]:
         )
         if detail["data"]["document_id"] != document_id:
             raise RuntimeError("installed CLI가 합성 원문을 조회하지 못했습니다.")
-        report = json.loads(
-            _run([str(legal_cli), "get-research-report", report_id], cwd=scratch, environment=environment)
+        search = json.loads(
+            _run([str(legal_cli), "search-legal-sources", "대손금"], cwd=scratch, environment=environment)
         )
-        if report["data"]["report_id"] != report_id:
-            raise RuntimeError("installed CLI가 저장된 report를 조회하지 못했습니다.")
+        if not any(item["document_id"] == document_id for item in search["data"]["items"]):
+            raise RuntimeError("installed CLI가 합성 자료를 검색하지 못했습니다.")
 
         archive = scratch / "backup.zip"
         restored = scratch / "restored"
@@ -139,15 +138,15 @@ def smoke_install(distribution: Path) -> dict[str, object]:
         )
         if restored_doctor["status"] != "ok":
             raise RuntimeError("복원된 data directory의 doctor가 실패했습니다.")
-        restored_report = json.loads(
+        restored_document = json.loads(
             _run(
-                [str(legal_cli), "get-research-report", report_id],
+                [str(legal_cli), "get-legal-document", "--document-id", document_id],
                 cwd=scratch,
                 environment=restored_environment,
             )
         )
-        if restored_report["data"]["report_id"] != report_id:
-            raise RuntimeError("복원된 report scope 조회가 실패했습니다.")
+        if restored_document["data"]["document_id"] != document_id:
+            raise RuntimeError("복원된 합성 원문 조회가 실패했습니다.")
 
         mcp_smoke = scratch / "mcp_smoke.py"
         mcp_smoke.write_text(
@@ -164,8 +163,6 @@ def smoke_install(distribution: Path) -> dict[str, object]:
                     "get_legal_document",
                     "get_applicable_law",
                     "verify_legal_citations",
-                    "research_tax_issue",
-                    "get_research_report",
                     "get_source_status",
                 }
 
@@ -178,23 +175,12 @@ def smoke_install(distribution: Path) -> dict[str, object]:
                     async with Client(parameters, raise_exceptions=True) as client:
                         listed = await client.list_tools()
                         assert {tool.name for tool in listed.tools} == EXPECTED
-                        research = await client.call_tool(
-                            "research_tax_issue",
-                            {
-                                "issue": "법인세 대손금 손금산입",
-                                "tax_type": "법인세",
-                                "transaction_date": "2025-06-30",
-                                "upstream": False,
-                            },
+                        document = await client.call_tool(
+                            "get_legal_document",
+                            {"document_id": "fixture:law:corporate-tax-bad-debt-v1"},
                         )
-                        assert not research.is_error
-                        report_id = research.structured_content["data"]["report_id"]
-                        report = await client.call_tool(
-                            "get_research_report",
-                            {"report_id": report_id},
-                        )
-                        assert not report.is_error
-                        assert report.structured_content["data"]["report_id"] == report_id
+                        assert not document.is_error
+                        assert document.structured_content["data"]["sections"]
 
                 asyncio.run(main())
                 """
@@ -207,7 +193,7 @@ def smoke_install(distribution: Path) -> dict[str, object]:
             "status": "ok",
             "wheel": wheel.name,
             "python": f"{sys.version_info.major}.{sys.version_info.minor}",
-            "tools": 8,
+            "tools": 6,
             "demo_document": document_id,
             "backup_restore": "verified",
             "taxax_checkout_required": False,

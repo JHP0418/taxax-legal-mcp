@@ -16,7 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .codex_config import CodexConfigError, register_codex, unregister_codex
+from .codex_config import CodexConfigError, register_codex
+from .codex_hook import register_stop_hook
 from .local_config import (
     LocalSecretError,
     copy_file_permissions,
@@ -27,9 +28,11 @@ from .local_config import (
     save_law_go_credential,
 )
 from .service import default_legal_data_dir
+from .version import package_version
 
 SERVER_NAME = "taxax-legal"
-APPLICATION_VERSION = "0.2.1"
+# 설치 경로를 버전별로 나누는 값이므로 배포 버전과 어긋나면 안 된다.
+APPLICATION_VERSION = package_version()
 _EXECUTABLES = ("taxax-legal.exe", "taxax-legal-mcp.exe")
 _MAX_CLAUDE_CONFIG_BYTES = 4 * 1024 * 1024
 
@@ -55,6 +58,7 @@ class InstallationResult:
     doctor_status: str
     codex_config_path: Path | None = None
     codex_registered: bool = False
+    codex_hook_path: Path | None = None
     claude_code_config_path: Path | None = None
     claude_code_registered: bool = False
 
@@ -512,19 +516,7 @@ def console_script(name: str) -> Path:
 
 
 def _supplemental_provider_env(*, nts_consent: bool, olta_consent: bool) -> dict[str, str]:
-    """NTS/OLTA는 law.go.kr과 달리 공식 오픈API·발급 키가 없어 사이트를 직접
-    읽어오는 방식이다. 따라서 여기서 저장하는 건 어떤 인증정보가 아니라
-    "운영자가 그 사이트의 이용약관을 직접 확인했다"는 로컬 동의 표시일 뿐이며,
-    MCP client 실행 시점에 이 환경변수로 서버에 전달된다.
-    """
-    environment: dict[str, str] = {}
-    if nts_consent:
-        environment["TAXAX_NTS_ENABLED"] = "1"
-        environment["TAXAX_NTS_TERMS_CONFIRMED"] = "1"
-    if olta_consent:
-        environment["TAXAX_OLTA_ENABLED"] = "1"
-        environment["TAXAX_OLTA_TERMS_CONFIRMED"] = "1"
-    return environment
+    return {}
 
 
 def install_pip_application(
@@ -566,6 +558,7 @@ def install_pip_application(
 
     codex_path: Path | None = None
     codex_registered = False
+    codex_hook_path: Path | None = None
     if register_codex_client:
         try:
             codex = register_codex(
@@ -576,10 +569,17 @@ def install_pip_application(
                 allow_update=allow_config_update,
                 extra_env=extra_env,
             )
+            hook = register_stop_hook(
+                cli_executable,
+                path=codex.config_path.with_name("hooks.json"),
+                confirmed=True,
+                allow_update=allow_config_update,
+            )
         except CodexConfigError as exc:
             raise InstallationError(str(exc)) from exc
         codex_path = codex.config_path
         codex_registered = True
+        codex_hook_path = hook.config_path
 
     claude_code_path: Path | None = None
     claude_code_registered = False
@@ -607,6 +607,7 @@ def install_pip_application(
             doctor_status=str(doctor["status"]),
             codex_config_path=codex_path,
             codex_registered=codex_registered,
+            codex_hook_path=codex_hook_path,
             claude_code_config_path=claude_code_path,
             claude_code_registered=claude_code_registered,
         )
@@ -630,6 +631,7 @@ def install_pip_application(
         doctor_status=str(doctor["status"]),
         codex_config_path=codex_path,
         codex_registered=codex_registered,
+        codex_hook_path=codex_hook_path,
         claude_code_config_path=claude_code_path,
         claude_code_registered=claude_code_registered,
     )

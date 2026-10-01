@@ -27,6 +27,15 @@ SCHEMA_VERSION = 2
 _STALE_RUN_SECONDS = 600.0
 
 
+class AmbiguousDocumentVersion(ValueError):
+    def __init__(self, versions: list[str]):
+        self.versions = versions
+        super().__init__(
+            "법령 시행본이 여러 개이거나 구 캐시에 식별자가 없습니다. "
+            "알려진 version_id를 지정하거나 공식 MST를 찾아 상세 원문을 다시 조회하십시오."
+        )
+
+
 def _seconds_since(started_at: str, reference: str) -> float:
     try:
         started = datetime.fromisoformat(started_at)
@@ -272,8 +281,28 @@ class LegalRepository:
         if version_id is not None:
             query += " AND version_id=?"
             params.append(version_id)
-        query += " ORDER BY retrieved_at DESC, record_id DESC LIMIT 1"
+        # 같은 document_id가 검색 미리보기와 상세 원문으로 각각 저장된다.
+        # 내용이 다르니 해시도 다른 것이 맞지만, 최신순으로만 고르면 나중에
+        # 수집된 미리보기가 먼저 받아둔 원문을 가린다. 실제로 10,137자짜리
+        # 헌재결정문이 108자 요약에 가려져 있었다. 같은 문서를 인용해도 조회
+        # 시점에 따라 본문 대신 요약 한 줄을 받게 된다.
+        # 완전한 본문을 먼저 고르고, 그 안에서 최신을 고른다.
+        query += (
+            " ORDER BY CASE WHEN json_extract(document_json, '$.content_completeness') = 'complete'"
+            " AND COALESCE(json_extract(document_json, '$.metadata.preview_only'), 0) IN (0, 'false') THEN 0 ELSE 1 END,"
+            " retrieved_at DESC, record_id DESC LIMIT 1"
+        )
         with self.connection() as connection:
+            if version_id is None and document_id.startswith(("law-go:law:", "law-go:eflaw:")):
+                editions = connection.execute(
+                    "SELECT DISTINCT version_id, "
+                    "COALESCE(json_extract(document_json, '$.effective_from'), '') AS effective_from, "
+                    "COALESCE(json_extract(document_json, '$.promulgated_on'), '') AS promulgated_on "
+                    "FROM legal_documents WHERE document_id=?",
+                    (document_id,),
+                ).fetchall()
+                if len(editions) > 1:
+                    raise AmbiguousDocumentVersion(sorted({row["version_id"] for row in editions if row["version_id"]}))
             row = connection.execute(query, params).fetchone()
         return LegalDocument.model_validate_json(row["document_json"]) if row else None
 
@@ -302,11 +331,23 @@ class LegalRepository:
             clauses.append("json_extract(document_json, '$.jurisdiction')=?")
             params.append(jurisdiction)
         where = " AND ".join(clauses)
+        # 정렬을 수집 시각만으로 하면 "방금 수집한 문서"가 언제나 맨 위로 온다.
+        # 매칭이 본문 substring까지 허용하므로, 질의어를 본문 어딘가에서 한 번
+        # 언급했을 뿐인 법령이 제목에 그 말이 들어간 예규보다 앞서게 된다.
+        # 실제로 "신용카드 등 사용금액에 대한 소득공제"를 조사할 때 직전 조사가
+        # 가져다 놓은 국제조세조정에 관한 법률 3종이 후보에 올라왔다. 이것이
+        # 밖에서 "직전 질의가 다음 질의에 샌다"고 관측된 현상의 정체다.
+        # 제목 일치를 본문 일치보다 앞세우면 같은 결정성을 유지하면서 이 역전을
+        # 없앨 수 있다. 본문 검색 자체를 없애지는 않는다. 제목에 없는 쟁점어로
+        # 찾아야 하는 경우가 있다.
+        title_match = "(CASE WHEN title LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END)"
+        order_params = [f"%{escaped}%"]
         with self.connection() as connection:
             total = connection.execute(f"SELECT COUNT(*) AS count FROM legal_documents WHERE {where}", params).fetchone()["count"]
             rows = connection.execute(
-                f"SELECT document_json FROM legal_documents WHERE {where} ORDER BY retrieved_at DESC, record_id DESC LIMIT ? OFFSET ?",
-                [*params, limit, offset],
+                f"SELECT document_json FROM legal_documents WHERE {where}"
+                f" ORDER BY {title_match}, retrieved_at DESC, record_id DESC LIMIT ? OFFSET ?",
+                [*params, *order_params, limit, offset],
             ).fetchall()
         return [LegalDocument.model_validate_json(row["document_json"]) for row in rows], int(total)
 

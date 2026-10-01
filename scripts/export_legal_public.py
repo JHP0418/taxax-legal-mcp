@@ -48,7 +48,7 @@ def _selected_files() -> list[Path]:
     files = [_ROOT / relative for relative in _EXACT_FILES]
     files.extend((_ROOT / "src" / "taxax" / "legal").rglob("*.py"))
     files.extend((_ROOT / "src" / "taxax" / "mcp").rglob("*.py"))
-    files.extend((_ROOT / "tests").glob("test_legal_*.py"))
+    files.extend(path for path in (_ROOT / "tests").glob("test_legal_*.py") if path.name != "test_legal_claude_e2e.py")
     files.extend(path for path in (_ROOT / "tests" / "legal_fixtures").rglob("*") if path.is_file())
     return sorted(set(files), key=lambda path: path.relative_to(_ROOT).as_posix())
 

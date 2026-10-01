@@ -39,6 +39,16 @@ def default_secret_file() -> Path:
 
 
 def _powershell(script: str, *, environment: dict[str, str]) -> str:
+    """ACL 스크립트를 Windows PowerShell로 실행한다.
+
+    스크립트 안에서 Get-Acl/Set-Acl 커맨드릿을 쓰지 않는 이유가 두 가지다.
+    Set-Acl은 디렉터리 대상일 때 SeSecurityPrivilege를 요구하는 결함이 있고,
+    Get-Acl은 Microsoft.PowerShell.Security 모듈에 들어 있어서 PSModulePath가
+    바뀐 환경(GitHub Actions windows runner처럼 pwsh용 경로로 덮어쓴 경우)에서는
+    "module could not be loaded"로 실패한다. 둘 다 FileInfo/DirectoryInfo의
+    GetAccessControl()/SetAccessControl() 메서드로 대체하면 모듈 로딩도
+    특권 요구도 없이 같은 일을 한다.
+    """
     executable = shutil.which("powershell.exe") or shutil.which("powershell")
     if executable is None:
         raise LocalSecretError("Windows ACL을 설정할 PowerShell을 찾지 못했습니다.")
@@ -125,7 +135,7 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $target = $env:TAXAX_ACL_TARGET
 $current = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-$acl = Get-Acl -LiteralPath $target
+$acl = (New-Object System.IO.DirectoryInfo($target)).GetAccessControl()
 $owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier])
 $rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
 $validRule = $false
@@ -165,7 +175,7 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $target = $env:TAXAX_ACL_TARGET
 $current = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-$acl = Get-Acl -LiteralPath $target
+$acl = (New-Object System.IO.FileInfo($target)).GetAccessControl()
 $owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier])
 $rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
 $validRule = $false
@@ -204,7 +214,7 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $source = $env:TAXAX_ACL_SOURCE
 $target = $env:TAXAX_ACL_TARGET
-$acl = Get-Acl -LiteralPath $source
+$acl = (New-Object System.IO.FileInfo($source)).GetAccessControl()
 $fileInfo = New-Object System.IO.FileInfo($target)
 $fileInfo.SetAccessControl($acl)
 """
@@ -326,7 +336,7 @@ try {
     }
     Rename-Item -LiteralPath $temp -NewName (Split-Path -Leaf $target)
 
-    $finalAcl = Get-Acl -LiteralPath $target
+    $finalAcl = (New-Object System.IO.FileInfo($target)).GetAccessControl()
     $ok = Test-TaxaxOwnerOnlyAcl $finalAcl $sid $false
     if (-not $ok) { throw "written file ACL verification failed" }
     [ordered]@{ ok = $true } | ConvertTo-Json -Compress
@@ -368,7 +378,7 @@ try {
     if ($item.LinkType) { throw "secret file is a symlink" }
     if ($item.Length -gt $maxBytes) { throw "secret file exceeds size limit" }
     $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-    $acl = Get-Acl -LiteralPath $target
+    $acl = (New-Object System.IO.FileInfo($target)).GetAccessControl()
     if (-not (Test-TaxaxOwnerOnlyAcl $acl $sid $false)) { throw "secret file is not protected to the current user" }
     $bytes = [System.IO.File]::ReadAllBytes($target)
     $b64 = [System.Convert]::ToBase64String($bytes)

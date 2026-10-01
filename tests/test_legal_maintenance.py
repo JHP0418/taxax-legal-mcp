@@ -11,22 +11,40 @@ from taxax.legal import maintenance as maintenance_module
 from taxax.legal.demo import DEMO_DOCUMENT_IDS, run_synthetic_demo
 from taxax.legal.maintenance import MaintenanceError, create_backup, restore_backup
 from taxax.legal.models import ResearchReport, ResponseStatus
+from taxax.legal.reports import ResearchReportRepository
 from taxax.legal.service import LegalKnowledgeService
 
 
 class LegalMaintenanceTests(unittest.TestCase):
-    def test_backup_restore_preserves_databases_raw_hash_and_report_scope(self):
+    def test_new_install_backup_does_not_create_obsolete_private_report_database(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             data_dir = root / "state"
             service = LegalKnowledgeService(root, data_dir=data_dir)
+            self.assertFalse((data_dir / "private" / "v1" / "reports.sqlite3").exists())
+            archive = root / "backup.zip"
+            create_backup(data_dir, archive)
+            with zipfile.ZipFile(archive) as bundle:
+                self.assertNotIn("private/v1/reports.sqlite3", bundle.namelist())
+            restored = root / "restored"
+            restore_backup(archive, restored)
+            self.assertGreaterEqual(service.repository.source_status()["database_schema_version"], 1)
+            self.assertFalse((restored / "private" / "v1" / "reports.sqlite3").exists())
+
+    def test_backup_restore_preserves_databases_raw_hash_and_report_scope(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data_dir = root / "state"
+            LegalKnowledgeService(root, data_dir=data_dir)
             report = ResearchReport(
                 report_id="research-" + "b" * 32,
                 issue="합성 backup 검증",
                 created_at="2026-09-14T00:00:00Z",
                 updated_at="2026-09-14T00:00:00Z",
             )
-            service.report_repository.save(report, principal_id="employee-1", org_id="office-1")
+            ResearchReportRepository(data_dir / "private" / "v1" / "reports.sqlite3").save(
+                report, principal_id="employee-1", org_id="office-1"
+            )
             raw = data_dir / "v1" / "raw" / "law.go.kr" / "fixture.bin"
             raw.parent.mkdir(parents=True)
             raw.write_bytes(b"synthetic-public-fixture")
@@ -49,19 +67,11 @@ class LegalMaintenanceTests(unittest.TestCase):
             result = restore_backup(archive, restored)
             self.assertEqual(result["status"], "ok")
             self.assertEqual((restored / "v1" / "raw" / "law.go.kr" / "fixture.bin").read_bytes(), raw.read_bytes())
-            restored_service = LegalKnowledgeService(root, data_dir=restored)
-            same_scope = restored_service.get_research_report(
-                report_id=report.report_id,
-                principal_id="employee-1",
-                org_id="office-1",
-            )
-            self.assertEqual(same_scope.status, ResponseStatus.OK)
-            other_scope = restored_service.get_research_report(
-                report_id=report.report_id,
-                principal_id="employee-2",
-                org_id="office-1",
-            )
-            self.assertEqual(other_scope.error.code.value, "NOT_FOUND")
+            restored_reports = ResearchReportRepository(restored / "private" / "v1" / "reports.sqlite3")
+            same_scope = restored_reports.get(report.report_id, principal_id="employee-1", org_id="office-1")
+            self.assertIsNotNone(same_scope)
+            self.assertEqual(same_scope.report_id, report.report_id)
+            self.assertIsNone(restored_reports.get(report.report_id, principal_id="employee-2", org_id="office-1"))
 
     def test_backup_restore_supports_synthetic_demo_extended_paths(self):
         with tempfile.TemporaryDirectory() as directory:

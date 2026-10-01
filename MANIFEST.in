@@ -22,6 +22,7 @@ recursive-include src/taxax/legal *.py
 recursive-include src/taxax/mcp *.py
 prune tests
 include tests/test_legal_*.py
+exclude tests/test_legal_claude_e2e.py
 recursive-include tests/legal_fixtures *
 global-exclude __pycache__
 global-exclude *.py[cod]

@@ -20,7 +20,10 @@ RUN groupadd --system taxax && \
     useradd --system --gid taxax --home-dir /nonexistent --shell /usr/sbin/nologin taxax && \
     mkdir /data && chown taxax:taxax /data
 COPY --from=builder /wheels /wheels
-RUN python -m pip install --no-index --find-links=/wheels taxax-legal-mcp==0.2.0 && rm -rf /wheels
+# 버전을 고정하면 릴리스를 올릴 때마다 여기도 같이 고쳐야 하고, 잊으면 빌드가
+# 깨진다(실제로 0.2.0에 멈춰 있어 0.2.8 빌드가 실패했다). /wheels에는 방금 만든
+# 우리 wheel 하나뿐이라 이름만으로 충분하다.
+RUN python -m pip install --no-index --find-links=/wheels taxax-legal-mcp && rm -rf /wheels
 USER taxax
 VOLUME ["/data"]
 EXPOSE 8765

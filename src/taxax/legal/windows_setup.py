@@ -8,6 +8,7 @@ import webbrowser
 from pathlib import Path
 from typing import Sequence
 
+from .console import prepare_console_streams
 from .installer import InstallationError, install_local_application, remove_local_credential
 from .local_config import default_secret_file
 from .service import default_legal_data_dir
@@ -24,6 +25,10 @@ def _bundle_directory() -> Path:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # --help 한 줄에 한글이 들어 있어, 코드페이지가 cp1252인 환경에서는 이
+    # 호출이 UnicodeEncodeError로 죽고 windowed bootloader가 메시지 상자를
+    # 띄운 채 멈춘다. argparse가 무엇이든 출력하기 전에 맞춰 둬야 한다.
+    prepare_console_streams()
     parser = argparse.ArgumentParser(prog="taxax-legal-setup", description="TAXax Legal MCP Windows 설치 마법사")
     parser.add_argument("--print-paths", action="store_true", help="사용자별 설치·데이터·secret 경로를 JSON으로 출력합니다.")
     parser.add_argument("--paths-output", type=Path, help=argparse.SUPPRESS)

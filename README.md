@@ -1,10 +1,10 @@
 # taxax-legal-mcp
 
-`taxax-legal-mcp`는 대한민국 세무 쟁점을 공식 공개 법률 자료와 함께 조사하는 독립 Python CLI/MCP 서버입니다. 법령 원문 cache, 출처 provenance, 시행시점 후보, 인용 검증, 근거별 점수 설명을 제공하지만 법적·세무 결론이나 장부 반영을 자동 확정하지 않습니다.
+`taxax-legal-mcp`는 대한민국 세무 쟁점에 필요한 공식 공개 법률 자료를 조회하는 독립 Python CLI/MCP 서버입니다. AI 클라이언트가 기관·검색어·원문 추가조회·중단을 선택하고, 서버는 원문 보존·출처·시행시점 후보·인용문 대조를 제공합니다. 법적·세무 결론이나 장부 반영을 자동 확정하지 않습니다.
 
 이 공개 package에는 TAXax 회계 engine, 고객 DB, `knowledge/`, 수집 원문, 사설 K-AR 자료가 포함되지 않습니다. GitHub 저장소는 source와 self-host 예제를 제공할 뿐 무료 hosted 운영 서버를 제공하지 않습니다.
 
-## 설치 (Windows 기준, 4단계)
+## 설치 (Windows 기준, 5단계)
 
 터미널 입력은 2줄뿐입니다.
 
@@ -20,7 +20,7 @@
 > 3단계의 `taxax-legal`도 인식되지 않습니다. 이때는 아래 형태로 대신 실행하십시오.
 >
 > ```powershell
-> python -m taxax.legal.cli install
+> python -m taxax.legal install
 > ```
 
 ### 2단계 — 프로그램 설치
@@ -40,8 +40,10 @@ taxax-legal install
 `'taxax-legal' 용어가 ... 인식되지 않습니다` 오류가 나면 2단계 설치 로그의 `not on PATH` 경고 때문입니다. 아래처럼 같은 명령을 실행하십시오. 동작은 동일합니다.
 
 ```powershell
-python -m taxax.legal.cli install
+python -m taxax.legal install
 ```
+
+모듈 실행은 PATH를 타지 않으므로 항상 통합니다. 아래 안내에 나오는 `taxax-legal ...` 명령은 모두 `python -m taxax.legal ...`로 바꿔 쓸 수 있습니다.
 
 이 한 줄이 다음을 모두 처리합니다.
 
@@ -52,7 +54,7 @@ python -m taxax.legal.cli install
 
 키를 나중에 넣으려면 `taxax-legal install --oc <키>`를 다시 실행하면 됩니다. 같은 명령을 여러 번 실행해도 안전합니다.
 
-> **법제처 API는 자료 종류별로 신청해야 합니다.** OC 키가 있어도 신청하지 않은 종류를 조회하면 법제처가 "미신청된 목록/본문에 대한 접근입니다"라고 응답합니다(조회 결과 대신 이 안내가 오류 메시지에 그대로 표시됩니다). [open.law.go.kr](https://open.law.go.kr) 로그인 → **OPEN API → OPEN API 신청 → 등록된 API 선택** 에서 필요한 법령종류를 체크하십시오. 법령·행정규칙·판례·조세심판원 재결례는 기본 신청으로 대부분 조회되지만, **국세청 법령해석(`ntsCgmExpc`)은 별도 체크가 필요한 경우가 많습니다.**
+> **법제처 API는 자료 종류별 목록·본문과 응답 형식별 이용 신청을 확인해야 합니다.** OC 키가 있어도 미승인 종류를 조회하면 "미신청된 목록/본문에 대한 접근입니다"라는 안내가 올 수 있습니다. [공동활용 신청 화면](https://open.law.go.kr/LSO/usrJoin.do)의 선택 체크만으로 실제 승인·조회 성공을 증명하지 않습니다. `ntsCgmExpc` 목록은 법제처 색인이며 국세청 해석 본문은 국세청 원본에서 확인합니다.
 
 **Claude Code에도 함께 등록하려면** `--claude-code`를 붙입니다. `~/.claude.json`의 `mcpServers`에 `taxax-legal` 항목만 더하고 프로젝트 기록 등 나머지 설정은 그대로 둡니다.
 
@@ -67,8 +69,22 @@ taxax-legal install --codex
 ```
 
 `~/.codex/config.toml`(또는 `CODEX_HOME`)에 `[mcp_servers.taxax-legal]` 항목만 덧붙이며, 기존 주석·설정·다른 MCP 서버는 그대로 둡니다. 변경 전 원본은 같은 폴더에 백업합니다.
+법령 도구는 읽기 전용으로 표시되고, Codex에는 해당 서버에 한해 `default_tools_approval_mode = "writes"`가 설정됩니다. 읽기 요청에도 공식 기관 네트워크 조회(`upstream=true` 또는 상세 `refresh=true`)가 포함될 수 있으므로 기관 이용정책과 호출 비용을 확인하십시오. 데스크톱 앱을 재시작한 뒤 `/mcp`에서 `taxax-legal` 연결을 확인하고, 합성 문서로 원문 조회와 인용 검증을 먼저 시험하십시오.
+이전 버전에서 이미 `taxax-legal`을 Codex에 등록했다면, 기존 항목 변경을 명시적으로 허용하는 `taxax-legal install --codex --force`를 사용하십시오.
+
+**Codex 재검토 훅도 `--codex` 설치에 포함됩니다.** 기존 `hooks.json`의 다른 훅은 보존하고 원본을 백업한 뒤, TAXax `Stop` 훅을 추가합니다. Codex를 재시작하고 `/hooks`에서 **TAXax legal answer recheck**를 직접 검토·신뢰해야 실행됩니다. 훅은 법령·조문·판례 등 법적 내용이 있는 답변에 한해 **모델에게 답변 직전 원문·시점·공식 링크를 한 번 더 확인하라고 요청**합니다. 이미 한 번 이어진 턴(`stop_hook_active`)은 다시 막지 않으므로 무한 루프가 없습니다. 추가 모델 호출·기관 조회로 사용량과 지연이 늘 수 있습니다.
+
+설치할 때 만들어지는 Codex 설정 폴더의 `taxax-legal-hook.json`을 편집해 횟수와 켜짐 상태를 직접 바꿀 수 있습니다(재설치해도 기존 선택을 덮어쓰지 않습니다).
+
+```json
+{"enabled": true, "max_rechecks": 1}
+```
+
+`max_rechecks`는 **0(추가 재검토 없음) 또는 1(최대 한 번)**만 허용합니다. `"enabled": false`로 끌 수 있습니다. 설정 파일을 바꾸는 것은 훅 정의를 바꾸지 않으므로 재신뢰가 필요 없습니다. 설치기에서 `taxax-legal uninstall`로 훅 등록을 제거해도 사용자가 바꾼 설정 파일은 보존합니다. **이 훅은 클라이언트의 독립적인 법률 검증기나 출력 차단 장치가 아닙니다.** Codex가 훅을 신뢰하지 않거나 MCP가 꺼진 경우, 또는 모델이 근거를 확인하지 못한 경우에는 실무자가 최종 원문·시점을 검토해야 합니다.
 
 > ChatGPT **웹/모바일**은 로컬 stdio 서버에 연결하지 못하고 HTTPS 원격 서버만 지원합니다. 이 경로는 아래 "Hosted HTTP" 절을 참고하십시오.
+
+**Claude Cowork·호스팅된 ChatGPT Work는 로컬 설치와 별도입니다.** Claude Desktop의 `claude_desktop_config.json`이나 Codex의 `config.toml` 등록만으로 두 환경에 도구가 나타나지 않습니다. 조직 인증을 갖춘 외부 접근 가능 HTTPS `/mcp`를 배포한 뒤 [Cowork 원격 커넥터](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp)와 [ChatGPT Work 플러그인](https://learn.chatgpt.com/docs/extend/mcp)을 각각 등록·승인·검증해야 합니다. 현재 로컬 CLI/MCP와 격리 Codex 훅 검증을 Cowork/Work 실사용 검증으로 대체하지 않습니다.
 
 > **업그레이드가 `WinError 32`로 실패한다면** MCP client가 서버를 띄워 둔 상태라 실행파일이 잠긴 것입니다.
 > `Access is denied` 또는 `다른 프로세스가 파일을 사용 중`이라는 메시지가 나오면 아래로 정리한 뒤 다시 설치하십시오.
@@ -79,9 +95,19 @@ taxax-legal install --codex
 >
 > 서버는 상태를 DB에 두므로 종료해도 잃는 자료가 없고, MCP client를 재시작하면 다시 연결됩니다.
 
-### 4단계 — Claude Desktop 재시작
+### 4단계 — 법률 색인 채우기
 
-완전히 종료한 뒤 다시 실행하면 도구 8개가 나타납니다. Claude에게 이렇게 물어보십시오.
+설치 직후 로컬 법률 색인은 **비어 있습니다.** 이 상태에서는 조회해도 0건이 나오며, 응답에 "아직 수집하지 않은 상태"라는 경고가 함께 옵니다. 아래 명령으로 기본 법령을 받아 두십시오. 3단계에서 OC 인증키를 등록했어야 합니다.
+
+```powershell
+taxax-legal collect-seeds
+```
+
+한 번 채워 두면 이후에는 인터넷 없이도(`upstream` 없이) 조회할 수 있습니다. 최신 개정을 반영하려면 가끔 다시 실행하십시오.
+
+### 5단계 — Claude Desktop 재시작
+
+완전히 종료한 뒤 다시 실행하면 도구 6개가 나타납니다. Claude에게 이렇게 물어보십시오.
 
 ```
 법인세법 제19조의2 대손금 조문 찾아줘
@@ -109,18 +135,18 @@ Claude Desktop·Claude Code·Codex 등록과 저장된 인증키를 지웁니다
 ## 요구사항
 
 - Python 3.11 이상
-- 법제처 upstream 사용 시 운영자용 `TAXAX_LAW_GO_OC` 또는 `taxax-legal install`로 저장한 인증키
-- NTS/OLTA는 운영자가 이용조건을 확인하고 각각 enabled + terms-confirmed를 모두 설정한 경우에만 사용
+- 법제처 upstream 사용 시 **사용자가 [open.law.go.kr](https://open.law.go.kr)에서 직접 발급받은 OC 인증키**. `taxax-legal install`로 저장하거나 `TAXAX_LAW_GO_OC`로 지정합니다. 이 배포본은 공용 인증키를 대신 제공하지 않습니다(각자 발급 방식)
+- NTS/OLTA 공개 조회는 기본 활성화됩니다. 운영상 중지가 필요하면 `TAXAX_NTS_ENABLED=0` 또는 `TAXAX_OLTA_ENABLED=0`으로 명시적으로 opt-out합니다. 기존 `TERMS_CONFIRMED` 값은 deprecated no-op입니다.
 - K-AR와 `korean-law-mcp` bridge는 선택 기능이며 없어도 CLI, stdio MCP, 공개 법률 조회, research workflow가 기동
 
 ## Windows 로컬 설치 마법사
 
-첫 공개 경로는 Windows 로컬 설치기입니다. 빌드된 bundle의 `SHA256SUMS.json`과 파일 hash를 먼저 대조한 뒤 `taxax-legal-setup-0.2.0-windows-<architecture>.exe`를 실행합니다. 최종 사용자는 별도 Python 설치가 필요하지 않습니다.
+첫 공개 경로는 Windows 로컬 설치기입니다. 빌드된 bundle의 `SHA256SUMS.json`과 파일 hash를 먼저 대조한 뒤 `taxax-legal-setup-<version>-windows-<architecture>.exe`를 실행합니다. 최종 사용자는 별도 Python 설치가 필요하지 않습니다.
 
 설치 마법사는 다음 순서로 동작합니다.
 
 1. 법제처 Open API OC를 입력하거나 건너뜁니다. 키가 없어도 local MCP와 offline demo는 기동되고 공식 upstream 조회만 비활성화됩니다.
-2. 실행파일을 `%LOCALAPPDATA%\TAXax\app\0.2.0`, 법률 data를 `%LOCALAPPDATA%\TAXax\legal`에 둡니다.
+2. 실행파일을 `%LOCALAPPDATA%\TAXax\app\<version>`, 법률 data를 `%LOCALAPPDATA%\TAXax\legal`에 둡니다.
 3. 사용자 동의를 받은 경우에만 `%APPDATA%\Claude\claude_desktop_config.json`을 백업하고 기존 root field와 다른 MCP server를 보존한 채 `taxax-legal` 항목을 원자적으로 병합합니다. 같은 이름의 다른 항목은 별도 교체 동의 없이는 거부합니다.
 4. `doctor`를 실행하고 Claude Desktop을 완전히 종료한 뒤 다시 시작하도록 안내합니다.
 
@@ -145,7 +171,7 @@ py -3.11 -m venv .venv
 .\.venv\Scripts\python -m pip install --upgrade pip
 .\.venv\Scripts\python -m pip install -e ".[dev]"
 .\.venv\Scripts\python -m build
-.\.venv\Scripts\python -m pip install .\dist\taxax_legal_mcp-0.2.0-py3-none-any.whl
+.\.venv\Scripts\python -m pip install .\dist\taxax_legal_mcp-<version>-py3-none-any.whl
 ```
 
 설정과 저장소를 진단합니다. `doctor`는 실 API를 호출하지 않습니다. `TAXAX_LEGAL_DATA_DIR`를 생략하면 실행 위치와 무관하게 Windows `%LOCALAPPDATA%\TAXax\legal`, macOS `~/Library/Application Support/TAXax/legal`, Linux `${XDG_DATA_HOME:-~/.local/share}/taxax/legal`을 사용합니다.
@@ -174,32 +200,31 @@ taxax-legal-mcp --transport stdio
 
 ## 공개 MCP tools
 
-공개 surface는 다음 8개로 고정합니다.
+공개 surface는 다음 6개입니다.
 
 1. `search_knowledge`
 2. `search_legal_sources`
 3. `get_legal_document`
 4. `get_applicable_law`
 5. `verify_legal_citations`
-6. `research_tax_issue`
-7. `get_research_report`
-8. `get_source_status`
+6. `get_source_status`
 
 `search_knowledge`는 `TAXAX_PRIVATE_KNOWLEDGE_DIR`를 명시한 경우에만 사설 읽기 전용 K-AR 디렉터리를 검색합니다. 현재 작업 디렉터리나 TAXax checkout의 `knowledge/`를 자동 탐색하지 않습니다.
 
 ## 조사 예시
 
-실제 upstream은 운영자 credential과 각 provider 이용조건을 준비한 환경에서만 활성화합니다.
+법제처 upstream에는 운영자 OC credential이 필요합니다. NTS/OLTA 공개 조회는 기본 활성화되며 명시적 `ENABLED=0`만 중지로 처리합니다. 각 provider의 접근정책, 호출 제한, 수록 범위는 별도로 준수해야 합니다.
 
 ```powershell
 $env:TAXAX_LAW_GO_OC = "<operator-managed-value>"
-taxax-legal research-tax-issue "매출채권 대손금 손금산입 요건" `
-  --tax-type 법인세 `
-  --transaction-date 2025-06-30 `
-  --research-as-of 2026-09-14
+taxax-legal search-legal-sources "법인세법 대손금" --provider law.go.kr --target law --upstream
 ```
 
-credential이 없거나 provider가 비활성이면 확인된 local 결과를 보존하고 `partial`과 미조사 범위를 반환합니다. 기본 remote budget은 실제 HTTP retry를 포함한 20회, 상세 8건, 60초이며 호출자가 상향할 수 없습니다.
+AI 클라이언트가 검색할 기관·검색어와 추가 원문 조회 여부를 선택합니다. `search_legal_sources`의 검색 요약은 원문이 아닙니다. 반환된 `next_cursor`로 같은 기관의 다음 검색 페이지를 조회하고, 검색 항목의 `document_id`로 `get_legal_document`를 호출하십시오. 상세 응답이 `partial`이고 본문이 없다면 `refresh=true`를 명시해 공식 상세를 조회하며, 절별 `next_cursor`가 있으면 필요한 다음 절도 조회합니다. 기준일 법령은 법령 ID가 아닌 해당 시행 버전의 MST와 기준일로 조회하고, 본문 확보 후 `verify_legal_citations`로 문구와 위치를 대조하십시오. **동일한 법령 ID 아래 시행본이 여러 개 있으면 `version_id`를 생략한 캐시 원문·인용 조회는 `TEMPORAL_UNRESOLVED` 또는 `unverified`로 멈춥니다.** 검색·상세 응답의 해당 MST를 `get_legal_document(document_id=…, version_id=…)`, `verify_legal_citations`의 각 인용 항목에 함께 전달하십시오. 과거 캐시에서 MST를 확인할 수 없으면 공식 MST로 새로 조회하십시오. `version_url`은 MST로 구성한 공식 웹 주소이며, 링크가 실제로 열리고 같은 시행본인지 별도 확인해야 합니다. 인증키가 없거나 출처가 응답하지 않으면 확인하지 못한 범위를 밝히고 법적 결론을 자동 확정하지 않습니다. 실제 고객자료는 별도 승인 없이 외부 AI 클라이언트로 보내지 마십시오.
+
+**기관 장애 시** 법제처 HTTP 요청은 기본 1회만 시도하고 `429`는 같은 작업 안에서 자동 재시도하지 않습니다. 국세청·OLTA도 본문·첨부·파싱 오류가 나면 작업 전체를 자동 반복하지 않습니다. 다른 MCP 도구 호출까지 차단하는 회로는 아니므로 `AUTH_FAILED`, `RATE_LIMITED`, `ACCESS_DENIED`, 시간초과 직후 같은 출처를 계속 호출하지 마십시오. 브라우저의 `open.law.go.kr` 가이드 페이지 시간초과는 MCP의 `www.law.go.kr/DRF/` 요청 실패나 IP 차단의 증거가 아닙니다. [이용 신청·장애 진단 절차](docs/legal-mcp-deployment.md#공식-출처-장애-진단)에 따라 승인 범위·출처·실패 단계를 구분하고 미확보 원문은 인용하지 마십시오.
+
+MCP 초기화 지침은 모델에게 답변 직전 각 법률 주장에 대응하는 **실제로 열리는 공식 원문 링크·시점·조문 또는 사건**을 재대조하고, 확인 불가한 주장은 제거하도록 요구합니다. 웹에서 발견한 링크도 해당 공식 페이지를 다시 확인해야 합니다. `verify_legal_citations`의 `verified`는 저장된 문서의 문구 일치만 뜻하며 링크 접근성·시행 버전·법적 적용을 보증하지 않습니다. **MCP 서버 자체는 클라이언트가 마지막에 작성하는 문장을 관찰하거나 모델의 두 번째 호출을 강제할 수 없습니다.** 위의 Codex `Stop` 훅은 설치·신뢰된 Codex 로컬 세션에서만 최대 1회 이어쓰기를 요청합니다. 모든 답변에 대한 기계적 강제가 필요하면 클라이언트의 최종 출력 승인 단계에서 별도로 검증하고 실패 시 출력을 차단해야 합니다.
 
 ## 데이터 분리
 
@@ -210,10 +235,10 @@ v1/legal.sqlite3              공개 법률 metadata/index
 v1/raw/**                     append-only 원문 snapshot
 v1/extracted/**               parser-version별 정규화 결과
 v1/runs/**                    수집 run manifest
-private/v1/reports.sqlite3    principal/org scope 조사 보고서
+private/v1/reports.sqlite3    이전 버전에 파일이 있을 때만 백업·복원(새 설치에는 생성되지 않음)
 ```
 
-보고서 DB에는 raw principal/org 값 대신 SHA-256 scope key를 저장합니다. report ID와 scope가 모두 맞아야 조회되며 다른 scope의 ID는 `NOT_FOUND`입니다.
+이전 버전의 보고서 DB는 백업·복원에서 보존합니다. 새 공개 MCP는 조사 보고서를 생성하거나 조회하지 않습니다. 과거 DB의 접근 권한과 백업 암호화 수준을 낮추지 마십시오.
 
 ## Hosted HTTP
 
@@ -243,7 +268,7 @@ taxax-legal --data-dir "$HOME\taxax-legal-data" backup .\backup-20260914.zip
 taxax-legal restore .\backup-20260914.zip "$HOME\taxax-legal-restored"
 ```
 
-복원은 기존 경로를 덮어쓰지 않습니다. 새 경로에서 `doctor`, source count, 원문 hash, 동일/타 scope report 조회를 검증한 후 환경변수를 전환하십시오.
+복원은 기존 경로를 덮어쓰지 않습니다. 새 경로에서 `doctor`, 출처별 문서 수, 원문 snapshot hash를 검증한 후 환경변수를 전환하십시오. 과거 보고서 DB가 있는 경우 백업·복원 파일 보존 여부만 확인하며 공개 MCP에서 조회하지 않습니다.
 
 ## 개발과 검증
 
@@ -266,9 +291,9 @@ python scripts/export_legal_public.py /path/to/new-empty-destination
 
 - L1 법제처 adapter: 합성 fixture 검증 완료
 - L2 NTS/OLTA adapter: 합성 fixture 검증 완료
-- L3 결정론 research workflow: local/합성 테스트 완료
+- AI 주도 조사 도구 계약: 합성 fixture와 오프라인 안전 probe 검증 완료. 실제 모델의 조사 선택·법적 답변 품질·3회 재생 및 구현 전 성능 기준선 대비 10% 판정은 미완료
 - JWT/JWKS와 server fail-closed: 합성 RSA token 및 설정 테스트 완료
-- 실제 공식 API 호출: 승인 credential과 이용조건이 없는 환경에서는 미실시
+- 실제 공식 API 호출: 법제처는 사용자 발급 OC가 필요하며, NTS/OLTA는 공개 조회 경로와 provider 접근정책·호출 제한을 준수
 - 실제 IdP/reverse proxy/DNS/직원 client 연결: 운영 인프라가 없는 환경에서는 미실시
 
 공식 자료의 수록 범위, 최신성, 재이용조건은 provider별 정책을 별도로 확인해야 합니다. 소프트웨어의 MIT license가 수집 원문의 재배포 권한을 의미하지 않습니다.

@@ -15,6 +15,8 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         python: ["3.11", "3.12"]
     runs-on: ${{ matrix.os }}
+    # 기본값은 6시간이다. 멈춘 job이 그만큼 러너를 붙잡고 있을 이유가 없다.
+    timeout-minutes: 30
     env:
       PYTHONUTF8: "1"
     steps:
@@ -55,6 +57,10 @@ jobs:
 
   windows-installer:
     runs-on: windows-latest
+    # PyInstaller 빌드 자체도 느리지만, 만들어진 설치기가 190MB onefile이라
+    # 실행할 때마다 그만큼을 임시 폴더에 풀고 Defender가 훑는다. 스모크가 그
+    # 실행파일을 세 번 띄우므로 여유가 필요하다.
+    timeout-minutes: 75
     env:
       # runner 컨텍스트는 job 레벨 env에서 쓸 수 없다. 여기에 두면 GitHub이
       # 워크플로 파일 전체를 무효로 판단해 어떤 job도 실행하지 않는다.

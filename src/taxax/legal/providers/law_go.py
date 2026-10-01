@@ -24,9 +24,11 @@ from .base import LegalTarget, ProviderError, ProviderResult, TargetContract
 SEARCH_ENDPOINT = "https://www.law.go.kr/DRF/lawSearch.do"
 DETAIL_ENDPOINT = "https://www.law.go.kr/DRF/lawService.do"
 GUIDE_BASE = "https://open.law.go.kr/LSO/openApi/guideResult.do?htmlName="
-PARSER_VERSION = "law-go-v1"
+PARSER_VERSION = "law-go-v3"
 
 COMMON_LIST_FILTERS = frozenset({"search", "query", "display", "page", "sort", "gana", "popYn"})
+# 법제처가 부여한 숫자 식별자만 받는 자리. admrul의 LM은 법령명을 받으므로 뺀다.
+_NUMERIC_IDENTIFIER_KINDS = frozenset({"ID", "MST", "LID"})
 CONTRACTS: dict[LegalTarget, TargetContract] = {
     LegalTarget.LAW: TargetContract(
         LegalTarget.LAW,
@@ -73,10 +75,22 @@ CONTRACTS: dict[LegalTarget, TargetContract] = {
         LegalTarget.NTS_INTERPRETATION,
         "nts_interpretation",
         True,
-        True,
+        # 법제처는 이 종류를 색인만 제공하고 본문은 갖고 있지 않다. 검색 응답의
+        # 각 항목은 법령해석상세링크로 taxlaw.nts.go.kr을 가리킨다(그 링크는
+        # official_url에 그대로 보존된다). 그런데도 detail을 True로 두면
+        # lawService.do에 본문을 요청하게 되고, 법제처는 제공하지 않는 요청에
+        # "미신청된 목록/본문에 대한 접근입니다" 안내 화면을 돌려준다. 우리는
+        # 그것을 AUTH_FAILED로 읽어, 신청이 모두 완료된 계정에서도 조사마다
+        # 인증 실패가 쌓였다. 실제로 이 오류를 보고 "라우팅이 고장났다"거나
+        # "API 신청이 빠졌다"는 잘못된 진단이 각각 나왔다.
+        # 본문이 필요하면 NTS provider가 원본 사이트에서 가져온다.
+        False,
         COMMON_LIST_FILTERS | {"explYd", "inq", "rpl", "itmno", "fields"},
         "explYd",
-        notes=("itmno가 있으면 upstream은 query를 무시합니다.",),
+        notes=(
+            "itmno가 있으면 upstream은 query를 무시합니다.",
+            "본문은 법제처가 아니라 국세청 원본(official_url)에 있습니다.",
+        ),
     ),
     LegalTarget.ADMIN_RULE: TargetContract(
         LegalTarget.ADMIN_RULE,
@@ -102,7 +116,7 @@ _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
         "특별행정심판재결례 일련번호", "법령해석일련번호", "행정규칙일련번호", "별표일련번호",
         "법령ID", "행정규칙ID", "id", "ID", "법령일련번호",
     ),
-    "version_id": ("법령일련번호", "현행연혁코드", "MST", "lsiSeq", "행정규칙일련번호"),
+    "version_id": ("법령일련번호", "MST", "lsiSeq", "행정규칙일련번호"),
     "title": ("법령명한글", "법령명_한글", "사건명", "안건명", "행정규칙명", "별표명", "재결례명", "법령해석명", "title"),
     "issuer": ("소관부처명", "해석기관명", "재결청", "발령기관명", "issuer"),
     "court": ("법원명", "court"),
@@ -132,7 +146,7 @@ _IDENTIFIER_ALIASES: dict[str, tuple[str, ...]] = {
         "법령ID", "판례일련번호", "판례정보일련번호", "특별행정심판재결례일련번호",
         "특별행정심판재결례 일련번호", "법령해석일련번호", "행정규칙일련번호", "별표일련번호", "ID", "id",
     ),
-    "MST": ("법령일련번호", "현행연혁코드", "MST", "lsiSeq"),
+    "MST": ("법령일련번호", "MST", "lsiSeq"),
     "LID": ("행정규칙ID", "LID"),
     "LM": ("행정규칙명", "행정규칙법령명", "LM"),
 }
@@ -299,6 +313,51 @@ def _identifier_values(mapping: Mapping[str, Any]) -> dict[str, list[str]]:
     return values
 
 
+def _article_sections(payload: Any) -> list[dict[str, Any]]:
+    """법령 상세 API의 조문단위 안에 들어 있는 항·호·목을 순서대로 보존한다."""
+    if not isinstance(payload, Mapping):
+        return []
+    law = payload.get("법령")
+    if not isinstance(law, Mapping):
+        return []
+    articles = law.get("조문")
+    if not isinstance(articles, Mapping):
+        return []
+    units = articles.get("조문단위")
+    units = units if isinstance(units, list) else [units]
+    sections = []
+    for index, unit in enumerate(units):
+        if not isinstance(unit, Mapping):
+            continue
+        text = []
+
+        def collect(node: Mapping[str, Any], field: str, child: str | None) -> None:
+            value = _scalar(node.get(field))
+            if value:
+                text.append(value)
+            if child:
+                nested = node.get(child)
+                nested = nested if isinstance(nested, list) else [nested]
+                next_field = {"항": "항내용", "호": "호내용", "목": "목내용"}[child]
+                next_child = {"항": "호", "호": "목", "목": None}[child]
+                for entry in nested:
+                    if isinstance(entry, Mapping):
+                        collect(entry, next_field, next_child)
+
+        collect(unit, "조문내용", "항")
+        if not text:
+            continue
+        number = _scalar(unit.get("조문번호"))
+        branch = _scalar(unit.get("조문가지번호"))
+        locator = f"제{number}조" + (f"의{branch}" if branch and branch != "0" else "") if number else "조문내용"
+        sections.append({
+            "section_id": f"articles-{index + 1}", "kind": "articles",
+            "heading": _scalar(unit.get("조문제목")), "locator": locator,
+            "text": "\n".join(text), "derived": False, "source_field": "조문단위",
+        })
+    return sections
+
+
 def extract_items(payload: Any, target: LegalTarget) -> tuple[list[dict[str, Any]], int | None, int | None]:
     mappings = list(_walk_mappings(payload))
     if isinstance(payload, Mapping):
@@ -330,7 +389,13 @@ def extract_items(payload: Any, target: LegalTarget) -> tuple[list[dict[str, Any
         existing = unique.get(key)
         if existing is None or len(item.get("sections", [])) > len(existing.get("sections", [])):
             unique[key] = item
-    return list(unique.values()), total, page
+    items = list(unique.values())
+    if len(items) == 1 and target in {LegalTarget.LAW, LegalTarget.EFFECTIVE_LAW}:
+        articles = _article_sections(payload)
+        if articles:
+            item = items[0]
+            item["sections"] = articles + [section for section in item["sections"] if section["kind"] != "articles"]
+    return items, total, page
 
 
 def normalize_item(mapping: Mapping[str, Any], target: LegalTarget) -> dict[str, Any]:
@@ -437,7 +502,21 @@ class LawGoProvider:
         kind = identifier_kind.upper()
         if kind not in contract.detail_identifiers:
             raise ProviderError(ErrorCode.INVALID_REQUEST, f"{target.value}에서 허용되지 않는 식별자 종류입니다.")
-        if not re.fullmatch(r"[A-Za-z0-9가-힣().·\- ]{1,200}", identifier):
+        if kind in _NUMERIC_IDENTIFIER_KINDS:
+            # 한글을 허용하는 넓은 규칙을 숫자 식별자에까지 그대로 쓰고 있었다.
+            # 그래서 law_id="소득세법"처럼 사람이 자연스럽게 넣는 값이 검증을
+            # 통과해 ID=소득세법으로 법제처에 그대로 전송됐고, 거기서 실패한
+            # 결과가 upstream 오류로 돌아와 "이 기능은 통째로 죽었다"는 진단이
+            # 나왔다. 여기서 막으면 무엇이 잘못됐고 무엇을 해야 하는지 바로
+            # 알 수 있다. (LM은 법령명을 받는 자리라 이 규칙에서 제외한다.)
+            if not re.fullmatch(r"\d{1,20}", identifier):
+                raise ProviderError(
+                    ErrorCode.INVALID_REQUEST,
+                    f"{kind}는 법제처가 부여한 숫자 식별자여야 합니다. "
+                    "법령명으로 찾으려면 search_legal_sources로 먼저 조회해 식별자를 확인하십시오.",
+                    details={"identifier_kind": kind},
+                )
+        elif not re.fullmatch(r"[A-Za-z0-9가-힣().·\- ]{1,200}", identifier):
             raise ProviderError(ErrorCode.INVALID_REQUEST, "식별자 형식이 올바르지 않습니다.")
         warnings = list(contract.notes)
         params: dict[str, str] = {"OC": self.credential or "", "target": target.value, "type": self._response_type(response_type), kind: identifier}
@@ -447,7 +526,7 @@ class LawGoProvider:
                     raise ProviderError(ErrorCode.TEMPORAL_UNRESOLVED, "MST 방식의 시행일 기준 조회에는 efYd가 필요합니다.")
                 params["efYd"] = self._compact_date(effective_on)
             elif effective_on:
-                warnings.append("ID 방식에서는 efYd가 무시되므로 전송하지 않았습니다.")
+                raise ProviderError(ErrorCode.TEMPORAL_UNRESOLVED, "ID 방식은 기준일 efYd를 적용하지 않습니다. 시행일 버전의 MST를 확인해 요청하십시오.")
         elif effective_on:
             raise ProviderError(ErrorCode.INVALID_REQUEST, f"{target.value} 상세 조회에는 efYd를 사용할 수 없습니다.")
         if article:
@@ -489,6 +568,24 @@ class LawGoProvider:
                 details={"requested_identifier_kind": kind, "available_identifier_kinds": available},
             )
         items = matching
+        if target in {LegalTarget.LAW, LegalTarget.EFFECTIVE_LAW}:
+            for item in items:
+                metadata = item["metadata"]
+                if kind == "MST":
+                    # 상세 응답은 요청한 일련번호를 생략하고 법령ID만 반환할 수 있다.
+                    # 그때도 서로 다른 시행본을 하나의 버전으로 합치지 않는다.
+                    item["version_id"] = identifier
+                    metadata["requested_mst"] = identifier
+                    metadata["version_identity_source"] = (
+                        "response_mst" if kind in available else "request_mst"
+                    )
+                elif not item.get("version_id"):
+                    # ID 방식은 특정 시행본을 지정하지 않으므로, 원문에 실린
+                    # 공포 키가 있을 때만 그 개정본을 구별한다.
+                    revision_key = _scalar(metadata.get("법령키"))
+                    if revision_key:
+                        item["version_id"] = revision_key
+                        metadata["version_identity_source"] = "response_revision_key"
         public_params = {key: value for key, value in params.items() if key != "OC"}
         return ProviderResult(target, public_params, response, parsed, items, len(items), 1, len(items), tuple(warnings))
 

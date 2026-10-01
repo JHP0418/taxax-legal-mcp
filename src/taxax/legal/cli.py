@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .demo import run_synthetic_demo
-from .codex_config import CodexConfigError, default_codex_config, unregister_codex
+from .codex_config import CodexConfigError, unregister_codex
+from .codex_hook import main as run_codex_stop_hook, unregister_stop_hook
 from .installer import (
     InstallationError,
     default_claude_code_config,
@@ -18,11 +19,23 @@ from .installer import (
     stop_mcp_servers,
     unregister_claude_desktop,
 )
-from .maintenance import MaintenanceError, create_backup, restore_backup
+from .console import prepare_console_streams
+from .maintenance import MaintenanceError, create_backup, renormalize_documents, restore_backup
 from .service import LegalKnowledgeService, default_legal_data_dir
 
-_NTS_URL = "https://taxlaw.nts.go.kr"
-_OLTA_URL = "https://olta.re.kr"
+_LAW_GO_OC_URL = "https://open.law.go.kr"
+
+
+def _invocation() -> str:
+    """사용자가 이 CLI를 부른 방식 그대로 후속 명령을 안내한다.
+
+    console script가 PATH에 없어 `python -m taxax.legal`로 들어온 사용자에게
+    `taxax-legal ...`을 안내하면, 그 명령은 그 사람 환경에서 실행되지 않는다.
+    안내문은 받는 사람이 그대로 붙여넣어 쓸 수 있어야 한다.
+    """
+    if Path(sys.argv[0]).name in {"__main__.py", "-m"} or not sys.argv[0]:
+        return f"{Path(sys.executable).name} -m taxax.legal"
+    return "taxax-legal"
 
 
 def _json_object(value: str) -> dict[str, Any]:
@@ -66,6 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     document = subparsers.add_parser("get-legal-document")
     document.add_argument("--document-id")
+    document.add_argument("--version-id", help="검색 결과의 version_id(MST); 다수 시행본이 있으면 필수입니다.")
     document.add_argument("--target")
     document.add_argument("--provider")
     document.add_argument("--source-document-id")
@@ -85,26 +99,11 @@ def build_parser() -> argparse.ArgumentParser:
     applicable.add_argument("--mst")
     applicable.add_argument("--law-id")
     applicable.add_argument("--document-id")
+    applicable.add_argument("--version-id")
     applicable.add_argument("--refresh", action="store_true")
 
     citations = subparsers.add_parser("verify-legal-citations")
     citations.add_argument("citations", type=_json_array)
-
-    research = subparsers.add_parser("research-tax-issue")
-    research.add_argument("issue")
-    research.add_argument("--tax-type")
-    research.add_argument("--transaction-date")
-    research.add_argument("--tax-period")
-    research.add_argument("--jurisdiction", default="KR")
-    research.add_argument("--research-as-of")
-    research.add_argument("--knowledge-cutoff")
-    research.add_argument("--budget", type=_json_object)
-    research.add_argument("--offline", action="store_true")
-
-    report = subparsers.add_parser("get-research-report")
-    report.add_argument("report_id")
-    report.add_argument("--cursor")
-    report.add_argument("--limit", type=int, default=10)
 
     subparsers.add_parser("doctor")
     subparsers.add_parser("get-source-status")
@@ -117,6 +116,12 @@ def build_parser() -> argparse.ArgumentParser:
     restore.add_argument("archive", type=Path)
     restore.add_argument("destination", type=Path)
 
+    renormalize = subparsers.add_parser(
+        "renormalize",
+        help="저장된 문서를 현재 파서 기준으로 다시 정규화합니다. 기본은 검사만 합니다.",
+    )
+    renormalize.add_argument("--apply", action="store_true", help="검사에 그치지 않고 실제로 고칩니다.")
+
     collect = subparsers.add_parser("collect-seeds")
     collect.add_argument("--run-id-prefix")
 
@@ -126,22 +131,22 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--config", type=Path, help="Claude Desktop 설정 파일 경로를 직접 지정합니다.")
     install.add_argument("--skip-claude", action="store_true", help="Claude Desktop 등록을 건너뜁니다.")
     install.add_argument("--force", action="store_true", help="기존 taxax-legal 등록을 갱신합니다.")
-    install.add_argument("--codex", action="store_true", help="Codex(~/.codex/config.toml)에도 등록합니다.")
+    install.add_argument("--codex", action="store_true", help="Codex MCP와 법률 답변 1회 재검토 Stop 훅을 등록합니다.")
     install.add_argument("--codex-config", type=Path, help="Codex 설정 파일 경로를 직접 지정합니다.")
     install.add_argument(
         "--nts",
         action="store_true",
-        help="국세청 세법해석 사전(taxlaw.nts.go.kr) 조회를 켭니다. 이용약관 확인이 필요합니다.",
+        help="deprecated 호환 옵션입니다. NTS 조회는 기본 활성입니다.",
     )
     install.add_argument(
         "--nts-terms-confirmed",
         action="store_true",
-        help=f"{_NTS_URL} 이용약관을 이미 확인했으므로 대화형 확인 없이 --nts를 켭니다.",
+        help="deprecated no-op 호환 옵션입니다.",
     )
     install.add_argument(
         "--olta",
         action="store_true",
-        help="지방세 조세심판원 결정례(olta.re.kr) 조회를 켭니다. 이용약관 확인이 필요합니다.",
+        help="deprecated 호환 옵션입니다. OLTA 조회는 기본 활성입니다.",
     )
     install.add_argument(
         "--claude-code",
@@ -152,7 +157,7 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument(
         "--olta-terms-confirmed",
         action="store_true",
-        help=f"{_OLTA_URL} 이용약관을 이미 확인했으므로 대화형 확인 없이 --olta를 켭니다.",
+        help="deprecated no-op 호환 옵션입니다.",
     )
 
     uninstall = subparsers.add_parser("uninstall", help="Claude Desktop 등록과 저장된 키를 제거합니다.")
@@ -167,6 +172,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="실행 중인 taxax-legal MCP 서버를 종료합니다. 업그레이드가 파일 잠금으로 막힐 때 사용합니다.",
     )
     stop.add_argument("--yes", action="store_true", help="확인 프롬프트 없이 종료합니다.")
+    hook = subparsers.add_parser("stop-hook", help=argparse.SUPPRESS)
+    hook.add_argument("--settings", type=Path, required=True)
     return parser
 
 
@@ -184,31 +191,8 @@ def _prompt_credential() -> str | None:
     return value or None
 
 
-def _prompt_terms_confirmation(name: str, url: str) -> bool:
-    """NTS/OLTA는 공식 API가 없어 사이트를 직접 읽어온다. 그래서 대신 동의하거나
-    자동으로 켤 수 없고, 운영자가 그 사이트에 직접 들어가 이용약관을 확인했는지
-    매번 물어봐야 한다. 비대화형 환경에서는 판단할 수 없으므로 켜지 않는다.
-    """
-    if not sys.stdin.isatty():
-        return False
-    sys.stdout.write(
-        f"{name} 조회를 켜려면 사이트 이용약관을 직접 확인해야 합니다.\n"
-        f"  {url} 에서 이용약관(자동 수집 관련 조항 포함)을 확인하십시오.\n"
-        "확인하셨으면 y, 아니면 그냥 Enter를 누르십시오.\n"
-        "동의하십니까? [y/N]: "
-    )
-    sys.stdout.flush()
-    return sys.stdin.readline().strip().lower() in {"y", "yes"}
-
-
 def run_install(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
     credential = None if arguments.no_oc else (arguments.oc or _prompt_credential())
-    nts_consent = bool(arguments.nts) and (
-        arguments.nts_terms_confirmed or _prompt_terms_confirmation("국세청 세법해석 사전(NTS)", _NTS_URL)
-    )
-    olta_consent = bool(arguments.olta) and (
-        arguments.olta_terms_confirmed or _prompt_terms_confirmation("지방세 조세심판원 결정례(OLTA)", _OLTA_URL)
-    )
     try:
         result = install_pip_application(
             config_path=arguments.config,
@@ -220,16 +204,16 @@ def run_install(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
             codex_config_path=arguments.codex_config,
             register_claude_code_client=arguments.claude_code,
             claude_code_config_path=arguments.claude_code_config,
-            nts_consent=nts_consent,
-            olta_consent=olta_consent,
         )
     except InstallationError as exc:
         return {"status": "error", "error": {"code": "INSTALL_FAILED", "message": str(exc)}}, 2
     next_steps = []
+    invocation = _invocation()
     if not arguments.skip_claude:
         next_steps.append("Claude Desktop을 재시작하면 taxax-legal 도구가 나타납니다.")
     if result.codex_registered:
         next_steps.append("Codex를 재시작하면 taxax-legal 도구가 나타납니다.")
+        next_steps.append(f"Codex `/hooks`에서 TAXax Stop 훅을 검토·신뢰하십시오. 훅은 기본 1회 재검토하며 {result.codex_hook_path.with_name('taxax-legal-hook.json')}에서 끄거나 0회로 설정할 수 있습니다.")
     elif not arguments.codex:
         next_steps.append("Codex에도 등록하려면 `--codex` 옵션을 함께 사용하십시오.")
     if result.claude_code_registered:
@@ -240,18 +224,18 @@ def run_install(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
     if running:
         next_steps.append(
             f"이전 버전 MCP 서버 {len(running)}개가 아직 실행 중입니다. "
-            "MCP client를 재시작하거나 `taxax-legal stop-servers`로 정리하십시오."
+            f"MCP client를 재시작하거나 `{invocation} stop-servers`로 정리하십시오."
         )
     if not result.credential_configured:
-        next_steps.append("법제처 외부 조회를 쓰려면 `taxax-legal install --oc <키>`로 인증키를 등록하십시오.")
-    if arguments.nts and not nts_consent:
+        # 인증키가 없으면 색인도 채울 수 없으므로 발급처부터 순서대로 알린다.
         next_steps.append(
-            f"NTS 조회를 켜려면 {_NTS_URL} 이용약관을 확인한 뒤 `--nts --nts-terms-confirmed`로 다시 설치하십시오."
+            f"법제처 외부 조회를 쓰려면 {_LAW_GO_OC_URL} 에서 OC 인증키를 무료로 발급받은 뒤 "
+            f"`{invocation} install --oc <키>`로 등록하십시오."
         )
-    if arguments.olta and not olta_consent:
-        next_steps.append(
-            f"OLTA 조회를 켜려면 {_OLTA_URL} 이용약관을 확인한 뒤 `--olta --olta-terms-confirmed`로 다시 설치하십시오."
-        )
+    next_steps.append(
+        f"설치 직후에는 로컬 법률 색인이 비어 있습니다. 인증키를 등록한 뒤 "
+        f"`{invocation} collect-seeds`로 채워야 이후 조회가 실제 문서를 돌려줍니다."
+    )
     return {
         "status": "ok",
         "data_dir": str(result.data_dir),
@@ -259,10 +243,11 @@ def run_install(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "claude_desktop_config": None if arguments.skip_claude else str(result.config_path),
         "config_backup": str(result.backup_path) if result.backup_path else None,
         "codex_config": str(result.codex_config_path) if result.codex_registered else None,
+        "codex_hook_config": str(result.codex_hook_path) if result.codex_registered else None,
         "claude_code_config": str(result.claude_code_config_path) if result.claude_code_registered else None,
         "credential_configured": result.credential_configured,
-        "nts_enabled": nts_consent,
-        "olta_enabled": olta_consent,
+        "nts_enabled": True,
+        "olta_enabled": True,
         "doctor_status": result.doctor_status,
         "next_steps": next_steps,
     }, 0
@@ -277,8 +262,12 @@ def run_uninstall(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
     if not confirmed:
         return {"status": "error", "error": {"code": "NOT_CONFIRMED", "message": "사용자가 취소했습니다."}}, 2
     try:
-        merged = unregister_claude_desktop(arguments.config, confirmed=True)
+        merged = (
+            unregister_claude_desktop(arguments.config, confirmed=True)
+            if arguments.config is not None or os.name == "nt" else None
+        )
         codex = unregister_codex(arguments.codex_config, confirmed=True)
+        codex_hook = unregister_stop_hook(path=arguments.codex_config.with_name("hooks.json") if arguments.codex_config else None, confirmed=True)
         claude_code = unregister_claude_desktop(
             arguments.claude_code_config or default_claude_code_config(),
             confirmed=True,
@@ -291,10 +280,11 @@ def run_uninstall(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
         return {"status": "error", "error": {"code": "UNINSTALL_FAILED", "message": str(exc)}}, 2
     return {
         "status": "ok",
-        "claude_desktop_config": str(merged.config_path),
-        "registration_removed": merged.changed,
+        "claude_desktop_config": str(merged.config_path) if merged else None,
+        "registration_removed": merged.changed if merged else False,
         "codex_config": str(codex.config_path),
         "codex_registration_removed": codex.changed,
+        "codex_hook_removed": codex_hook.changed,
         "claude_code_config": str(claude_code.config_path),
         "claude_code_registration_removed": claude_code.changed,
         "credential_removed": credential_removed,
@@ -353,6 +343,7 @@ def execute(arguments: argparse.Namespace, service: LegalKnowledgeService):
     if arguments.command == "get-legal-document":
         return service.get_legal_document(
             document_id=arguments.document_id,
+            version_id=arguments.version_id,
             target=arguments.target,
             provider=arguments.provider,
             source_document_id=arguments.source_document_id,
@@ -373,28 +364,11 @@ def execute(arguments: argparse.Namespace, service: LegalKnowledgeService):
             mst=arguments.mst,
             law_id=arguments.law_id,
             document_id=arguments.document_id,
+            version_id=arguments.version_id,
             refresh=arguments.refresh,
         )
     if arguments.command == "verify-legal-citations":
         return service.verify_legal_citations(citations=arguments.citations)
-    if arguments.command == "research-tax-issue":
-        return service.research_tax_issue(
-            issue=arguments.issue,
-            tax_type=arguments.tax_type,
-            transaction_date=arguments.transaction_date,
-            tax_period=arguments.tax_period,
-            jurisdiction=arguments.jurisdiction,
-            research_as_of=arguments.research_as_of,
-            knowledge_cutoff=arguments.knowledge_cutoff,
-            budget=arguments.budget,
-            upstream=not arguments.offline,
-        )
-    if arguments.command == "get-research-report":
-        return service.get_research_report(
-            report_id=arguments.report_id,
-            cursor=arguments.cursor,
-            limit=arguments.limit,
-        )
     if arguments.command == "doctor":
         return service.doctor()
     if arguments.command == "get-source-status":
@@ -407,8 +381,13 @@ def execute(arguments: argparse.Namespace, service: LegalKnowledgeService):
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # 결과 JSON을 ensure_ascii=False로 내보내므로, 코드페이지가 한글을
+    # 담지 못하는 환경에서는 출력 한 번에 UnicodeEncodeError로 죽는다.
+    prepare_console_streams()
     parser = build_parser()
     arguments = parser.parse_args(argv)
+    if arguments.command == "stop-hook":
+        return run_codex_stop_hook(["--settings", str(arguments.settings)])
     if arguments.command == "stop-servers":
         result, code = run_stop_servers(arguments)
         sys.stdout.write(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
@@ -417,6 +396,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         result, code = run_install(arguments) if arguments.command == "install" else run_uninstall(arguments)
         sys.stdout.write(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
         return code
+    if arguments.command == "renormalize":
+        configured = os.environ.get("TAXAX_LEGAL_DATA_DIR")
+        data_dir = arguments.data_dir or (Path(configured) if configured else default_legal_data_dir())
+        try:
+            result = renormalize_documents(data_dir / "v1" / "legal.sqlite3", apply=arguments.apply)
+            if not arguments.apply and result["changed"]:
+                result["next_step"] = f"`{_invocation()} renormalize --apply`로 실제로 고칩니다."
+        except (MaintenanceError, OSError, ValueError) as exc:
+            result = {"status": "error", "error": {"code": "MAINTENANCE_FAILED", "message": str(exc)}}
+        sys.stdout.write(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+        return 0 if result["status"] == "ok" else 2
     if arguments.command in {"backup", "restore"}:
         try:
             if arguments.command == "backup":

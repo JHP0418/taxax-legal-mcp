@@ -39,11 +39,19 @@ TAXAX_MCP_ALLOWED_ORIGINS
 ## Self-host provider 준비
 
 1. 법제처 API 이용 승인과 운영 credential을 준비합니다.
-2. NTS/OLTA는 각각 이용조건과 접근정책을 확인합니다.
-3. 확인 전에는 `TAXAX_NTS_ENABLED=0`, `TAXAX_OLTA_ENABLED=0`을 유지합니다.
-4. 확인 후에만 enabled와 terms-confirmed를 모두 1로 설정합니다.
+2. NTS/OLTA 공개 조회는 설정이 없으면 기본 활성화됩니다. 운영상 중지가 필요할 때만 `TAXAX_NTS_ENABLED=0` 또는 `TAXAX_OLTA_ENABLED=0`으로 명시적으로 opt-out합니다.
+3. 기존 `TAXAX_NTS_TERMS_CONFIRMED`, `TAXAX_OLTA_TERMS_CONFIRMED` 값은 deprecated no-op이며 활성화 조건이 아닙니다.
+4. 각 provider의 접근정책, 호출 제한, 수록 범위와 원문 재이용 조건은 별도로 확인하고 준수합니다.
 5. 실호출은 최소 공개 키워드로 제한하고 고객명·사업자등록번호·계좌번호 등 식별정보를 보내지 않습니다.
 6. provider quota, 수록 범위, 실제 응답 schema를 fixture 검증과 별도로 기록합니다.
+
+### 공식 출처 장애 진단
+
+- [법제처 공동활용 신청·이용안내](https://open.law.go.kr/LSO/information/guide.do)에서 OC와 자료 종류별 **목록/본문·형식(XML/JSON)** 승인 상태를 먼저 확인합니다. 신청 화면의 선택 체크만으로 실제 승인·접근 성공을 증명하지 않습니다. 미신청 안내나 `AUTH_FAILED`를 IP 차단으로 단정하지 마십시오. TAXax의 국세청 해석 `ntsCgmExpc` 목록은 법제처 색인이며 해당 본문은 국세청 원본에서 확인합니다.
+- `open.law.go.kr/LSO/openApi/guideList.do` 브라우저 시간초과와 MCP가 호출하는 `www.law.go.kr/DRF/lawSearch.do`·`lawService.do` 실패는 서로 다른 요청입니다. 브라우저 화면 하나만으로 API 또는 IP 차단을 판정할 수 없습니다. 법제처 [API 신청 화면](https://open.law.go.kr/LSO/usrJoin.do)은 짧은 시간의 과도한 호출 제한을 안내합니다. 반복 시험 전에 [공지](https://open.law.go.kr/LSO/support/noticeList.do), 승인 내역 및 사이트의 오류자가진단·IP 접속이력을 확인하고 운영기관에 문의합니다.
+- 실패를 재현할 때는 비밀 OC·쿠키·고객자료를 제외한 provider, target, ID/MST, HTTP 상태, 실패 단계(timeout/DNS/TLS/HTTP/parse), 시도 횟수와 응답 안내 문구를 **한 요청 단위로** 기록합니다. `429`나 `Retry-After`, `401/403`, CAPTCHA/접근 차단, 시간초과 뒤 즉시 반복 호출하거나 다른 IP·인증값으로 우회하지 마십시오. 원문이 없으면 검증되지 않은 인용과 적용 결론을 보류합니다.
+- 기본 법제처 HTTP 호출은 한 번만 시도하고 `429`의 재시도를 금지합니다. 국세청(`taxlaw.nts.go.kr`)·OLTA(`olta.re.kr`)의 실패도 전체 작업을 자동 재생하지 않습니다. 이 정책은 **한 작업 내 요청 증폭만** 방지하며, 서로 다른 MCP 호출을 가로지르는 영구 차단이나 기관의 가동률 보장은 아닙니다. 기관이 정상화되었는지 확인한 뒤 승인된 범위에서 새 요청을 수행합니다.
+- 법제처 [API 활용가이드](https://open.law.go.kr/LSO/openApi/guideList.do)의 별표·서식 예시에는 텍스트와 별개인 HWP/PDF 다운로드 링크가 있습니다. 별표 본문이나 파일명만 받았다면 실제 파일 내용을 확인한 것으로 취급하지 않습니다. 다운로드 경로가 열리지 않으면 그 범위를 미확보로 남기고 반복 다운로드로 서버 부하를 키우지 않습니다.
 
 ## Backup
 
@@ -56,7 +64,7 @@ taxax-legal --data-dir /srv/taxax-legal/data backup /srv/taxax-legal/backups/bac
 archive에는 다음이 포함됩니다.
 
 - `v1/legal.sqlite3`
-- `private/v1/reports.sqlite3`
+- `private/v1/reports.sqlite3` (이전 설치에 존재하는 경우만 보존)
 - `v1/raw/**`
 - `v1/extracted/**`
 - `v1/runs/**`
@@ -80,9 +88,9 @@ TAXAX_LEGAL_DATA_DIR=/srv/taxax-legal/data-restored taxax-legal get-source-statu
 
 1. `doctor`의 public/private schema가 정상인지 확인합니다.
 2. `get-source-status`의 document/snapshot/report count를 원본과 대조합니다.
-3. 대표 `snapshot_ref`를 읽고 `raw_sha256`을 재계산합니다.
-4. 동일 principal/org에서 대표 report를 조회합니다.
-5. 타 principal 또는 org에서 같은 report ID가 `NOT_FOUND`인지 확인합니다.
+3. 대표 `snapshot_ref`의 원본 바이트 SHA-256을 계산하고 `snapshot_raw_sha256`과 대조합니다. 문서의 `raw_sha256`은 개별 정규화 항목의 해시이므로 여러 문서가 공유하는 응답 원본의 바이트 해시와 같다고 가정하지 않습니다.
+4. 대표 공개 문서를 검색하고 같은 `document_id`의 상세 조회에서 본문 확보 상태·절별 cursor·개별 문서 해시를 대조합니다. 검색 메타데이터만 있으면 원문 확보로 판정하지 않습니다.
+5. 이전 버전의 비공개 보고서 DB는 백업·복원에서 보존하되 새 공개 MCP의 조회 기능으로 간주하지 않습니다.
 6. 서버를 복원 경로로 기동한 뒤 stdio 또는 인증 HTTP smoke test를 수행합니다.
 
 ## Update
@@ -91,7 +99,7 @@ TAXAX_LEGAL_DATA_DIR=/srv/taxax-legal/data-restored taxax-legal get-source-statu
 2. 현재 data directory를 backup합니다.
 3. 새 version에서 복원 복제본을 대상으로 `doctor`, tests, MCP smoke를 실행합니다.
 4. 운영 binary/image만 교체하고 data directory는 그대로 유지합니다.
-5. source status와 report scope를 재확인합니다.
+5. source status와 문서 검색·원문 조회·인용 검사를 재확인합니다.
 
 ## Rollback
 
@@ -107,7 +115,7 @@ TAXAX_LEGAL_DATA_DIR=/srv/taxax-legal/data-restored taxax-legal get-source-statu
 
 ## Windows release 검증
 
-Windows 3.11 CI는 `[dev,windows]` extras를 설치하고 PyInstaller one-file setup/CLI/MCP를 빌드합니다. smoke는 manifest hash, setup 내장 payload, 두 개의 서로 다른 cwd에서 `doctor`, 합성 demo, backup/restore, 실제 MCP SDK의 8-tool initialize/list/research/report round trip을 임시 사용자 경로에서 검증합니다. 실제 사용자의 Claude Desktop 설정·credential은 변경하지 않습니다.
+Windows 3.11 CI는 `[dev,windows]` extras를 설치하고 PyInstaller one-file setup/CLI/MCP를 빌드합니다. smoke는 manifest hash, setup 내장 payload, 두 개의 서로 다른 cwd에서 `doctor`, 합성 demo, backup/restore, 실제 MCP SDK의 6-tool initialize/list/검색·원문·인용 확인 round trip을 임시 사용자 경로에서 검증합니다. 실제 사용자의 Claude Desktop 설정·credential은 변경하지 않습니다.
 
 `SHA256SUMS.json`은 code signing과 SmartScreen 상태를 별도 field로 기록합니다. 현재 source 기준 기대값은 unsigned와 평판 미확립이며, clean Windows 계정에서의 GUI 설치·Claude Desktop 재시작·code signing·SmartScreen은 실제 release 환경에서 별도로 검증해야 합니다.
 

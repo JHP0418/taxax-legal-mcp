@@ -26,6 +26,15 @@ class LegalMcpTests(unittest.IsolatedAsyncioTestCase):
             environment["TAXAX_LEGAL_SECRET_FILE"] = str(Path(directory) / "unused-secret.json")
             parameters = StdioServerParameters(command=sys.executable, args=["-m", "taxax.mcp.server"], env=environment)
             async with Client(parameters, raise_exceptions=True) as client:
+                instructions = client.session.instructions
+                self.assertIn("답변 직전", instructions)
+                self.assertIn("TAXax MCP를 우선 사용", instructions[:512])
+                self.assertIn("provider=law.go.kr", instructions[:512])
+                self.assertIn("verify_legal_citations", instructions)
+                self.assertIn("웹", instructions)
+                self.assertIn("실제 원문 링크", instructions[:512])
+                self.assertIn("링크가 열리지 않거나", instructions)
+                self.assertIn("RATE_LIMITED, AUTH_FAILED, ACCESS_DENIED 또는 시간초과", instructions)
                 listed = await client.list_tools()
                 tools = {tool.name: tool for tool in listed.tools}
                 expected = {
@@ -34,33 +43,26 @@ class LegalMcpTests(unittest.IsolatedAsyncioTestCase):
                     "get_legal_document",
                     "get_applicable_law",
                     "verify_legal_citations",
-                    "research_tax_issue",
-                    "get_research_report",
                     "get_source_status",
                 }
                 self.assertEqual(set(tools), expected)
                 for tool in tools.values():
                     self.assertEqual(tool.input_schema.get("type"), "object")
                     self.assertEqual(tool.output_schema.get("type"), "object")
+                    self.assertIsNotNone(tool.annotations)
+                    self.assertTrue(tool.annotations.read_only_hint)
+                    self.assertFalse(tool.annotations.destructive_hint)
+                for name in ("search_legal_sources", "get_legal_document", "get_applicable_law"):
+                    self.assertTrue(tools[name].annotations.open_world_hint)
+                self.assertIn("version_id", tools["get_legal_document"].input_schema["properties"])
+                self.assertIn("version_id", tools["get_applicable_law"].input_schema["properties"])
                 status = await client.call_tool("get_source_status", {})
                 self.assertFalse(status.is_error)
                 self.assertEqual(status.structured_content["status"], "ok")
                 self.assertEqual(status.content[0].type, "text")
-                research = await client.call_tool(
-                    "research_tax_issue",
-                    {
-                        "issue": "법인세 대손금 손금산입",
-                        "tax_type": "법인세",
-                        "transaction_date": "2026-01-02",
-                        "upstream": False,
-                    },
-                )
-                self.assertFalse(research.is_error)
-                self.assertEqual(research.structured_content["status"], "partial")
-                report_id = research.structured_content["data"]["report_id"]
-                report = await client.call_tool("get_research_report", {"report_id": report_id})
-                self.assertFalse(report.is_error)
-                self.assertEqual(report.structured_content["data"]["report_id"], report_id)
+                local_search = await client.call_tool("search_legal_sources", {"query": "법인세 대손금"})
+                self.assertFalse(local_search.is_error)
+                self.assertEqual(local_search.structured_content["status"], "ok")
                 blocked = await client.call_tool(
                     "search_legal_sources",
                     {"query": "민법", "target": "law", "upstream": True},
@@ -68,6 +70,16 @@ class LegalMcpTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(blocked.is_error)
                 self.assertEqual(blocked.structured_content["status"], "blocked")
                 self.assertEqual(blocked.structured_content["error"]["code"], "AUTH_REQUIRED")
+                invalid_cursor = await client.call_tool(
+                    "search_legal_sources",
+                    {"query": "법인세", "cursor": str(2**63)},
+                )
+                self.assertTrue(invalid_cursor.is_error)
+                self.assertEqual(invalid_cursor.structured_content["status"], "error")
+                self.assertEqual(
+                    invalid_cursor.structured_content["error"]["code"],
+                    "INVALID_REQUEST",
+                )
 
     def test_http_without_auth_is_loopback_and_opt_in_only(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(

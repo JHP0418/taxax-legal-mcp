@@ -59,7 +59,9 @@ def _read(path: Path) -> tuple[str, dict[str, Any]]:
     try:
         parsed = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
-        raise CodexConfigError("Codex 설정 TOML이 올바르지 않아 변경하지 않았습니다.") from exc
+        raise CodexConfigError(
+            "Codex 설정 TOML이 올바르지 않아 변경하지 않았습니다."
+        ) from exc
     return text, parsed
 
 
@@ -69,17 +71,22 @@ def _expected_env(data_dir: Path, extra_env: dict[str, str] | None) -> dict[str,
     return environment
 
 
-def server_block(mcp_executable: Path, data_dir: Path, *, extra_env: dict[str, str] | None = None) -> str:
+def server_block(
+    mcp_executable: Path, data_dir: Path, *, extra_env: dict[str, str] | None = None
+) -> str:
     executable = mcp_executable.resolve()
     storage = data_dir.resolve()
     if not executable.is_absolute() or not storage.is_absolute():
         raise CodexConfigError("MCP executable과 data directory는 절대경로여야 합니다.")
     environment = _expected_env(data_dir, extra_env)
-    env_lines = "\n".join(f"{key} = {_toml_string(value)}" for key, value in environment.items())
+    env_lines = "\n".join(
+        f"{key} = {_toml_string(value)}" for key, value in environment.items()
+    )
     return (
         f"{_SECTION}\n"
         f"command = {_toml_string(str(executable))}\n"
         'args = ["--transport", "stdio"]\n'
+        'default_tools_approval_mode = "writes"\n'
         f"\n{_ENV_SECTION}\n"
         f"{env_lines}\n"
     )
@@ -104,6 +111,7 @@ def _matches(
     return (
         entry.get("command") == str(mcp_executable.resolve())
         and list(entry.get("args") or []) == ["--transport", "stdio"]
+        and entry.get("default_tools_approval_mode") == "writes"
         and environment == _expected_env(data_dir, extra_env)
     )
 
@@ -128,15 +136,37 @@ def _write_atomic(path: Path, payload: str, *, existed: bool) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
-        temporary.write_text(payload, encoding="utf-8", newline="")
+        descriptor = os.open(
+            temporary,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0),
+            0o600,
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
+            restrict_file_to_current_user(temporary)
+            stream.write(payload)
         if existed:
             copy_file_permissions(path, temporary)
-        else:
-            restrict_file_to_current_user(temporary)
         os.replace(temporary, path)
     except Exception:
         temporary.unlink(missing_ok=True)
         raise
+
+
+def _private_backup(path: Path, original: bytes) -> Path:
+    backup = path.with_name(f"{path.name}.taxax-backup-{uuid.uuid4().hex[:8]}")
+    try:
+        descriptor = os.open(
+            backup,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0),
+            0o600,
+        )
+        with os.fdopen(descriptor, "wb") as stream:
+            restrict_file_to_current_user(backup)
+            stream.write(original)
+    except Exception:
+        backup.unlink(missing_ok=True)
+        raise
+    return backup
 
 
 def register_codex(
@@ -155,16 +185,19 @@ def register_codex(
         raise CodexConfigError("Codex 설정 파일은 절대경로여야 합니다.")
     text, parsed = _read(target)
     existing = _existing_entry(parsed)
-    if existing is not None and _matches(existing, mcp_executable, data_dir, extra_env=extra_env):
+    if existing is not None and _matches(
+        existing, mcp_executable, data_dir, extra_env=extra_env
+    ):
         return CodexMergeResult(changed=False, config_path=target, backup_path=None)
     if existing is not None and not allow_update:
-        raise CodexConfigError("동일한 taxax-legal Codex 등록이 이미 있어 확인 없이 덮어쓰지 않습니다.")
+        raise CodexConfigError(
+            "동일한 taxax-legal Codex 등록이 이미 있어 확인 없이 덮어쓰지 않습니다."
+        )
 
     existed = bool(text)
     backup: Path | None = None
     if existed:
-        backup = target.with_name(f"{target.name}.taxax-backup-{uuid.uuid4().hex[:8]}")
-        backup.write_text(text, encoding="utf-8", newline="")
+        backup = _private_backup(target, text.encode("utf-8"))
 
     body = _strip_sections(text) if existing is not None else text
     if body and not body.endswith("\n"):
@@ -176,7 +209,9 @@ def register_codex(
     except tomllib.TOMLDecodeError as exc:
         if backup is not None:
             backup.unlink(missing_ok=True)
-        raise CodexConfigError("생성된 Codex 설정이 올바른 TOML이 아니어서 변경하지 않았습니다.") from exc
+        raise CodexConfigError(
+            "생성된 Codex 설정이 올바른 TOML이 아니어서 변경하지 않았습니다."
+        ) from exc
     try:
         _write_atomic(target, payload, existed=existed)
     except Exception:
@@ -195,14 +230,15 @@ def unregister_codex(path: Path | None = None, *, confirmed: bool) -> CodexMerge
     text, parsed = _read(target)
     if _existing_entry(parsed) is None:
         return CodexMergeResult(changed=False, config_path=target, backup_path=None)
-    backup = target.with_name(f"{target.name}.taxax-backup-{uuid.uuid4().hex[:8]}")
-    backup.write_text(text, encoding="utf-8", newline="")
+    backup = _private_backup(target, text.encode("utf-8"))
     payload = _strip_sections(text)
     try:
         tomllib.loads(payload)
     except tomllib.TOMLDecodeError as exc:
         backup.unlink(missing_ok=True)
-        raise CodexConfigError("제거 결과가 올바른 TOML이 아니어서 변경하지 않았습니다.") from exc
+        raise CodexConfigError(
+            "제거 결과가 올바른 TOML이 아니어서 변경하지 않았습니다."
+        ) from exc
     try:
         _write_atomic(target, payload, existed=True)
     except Exception:
