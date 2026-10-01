@@ -11,8 +11,10 @@ from __future__ import annotations
 import os
 import re
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from taxax.legal.version import package_version, source_version
 
@@ -45,12 +47,26 @@ class VersionSingleSourceTests(unittest.TestCase):
         self.assertIn("_VERSION = source_version()", source)
         self.assertNotRegex(source, r'_VERSION\s*=\s*"')
 
-    def test_frozen_mcp_entry_does_not_shadow_sdk_mcp_server(self):
-        from scripts.build_windows_installer import _MCP_FROZEN_ENTRY
+    def test_frozen_entry_is_staged_outside_the_taxax_namespace(self):
+        from scripts import build_windows_installer as builder
 
-        self.assertTrue(_MCP_FROZEN_ENTRY.is_file())
-        self.assertFalse((_MCP_FROZEN_ENTRY.parent / "server.py").exists())
-        self.assertNotEqual(_MCP_FROZEN_ENTRY.parent.name, "mcp")
+        entries = (
+            _ROOT / "src" / "taxax" / "legal" / "frozen_cli.py",
+            builder._MCP_FROZEN_ENTRY,
+            _ROOT / "src" / "taxax" / "legal" / "frozen_setup.py",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            spec = root / "spec"
+            spec.mkdir()
+            for entry in entries:
+                with self.subTest(entry=entry.name), patch.object(builder.subprocess, "run") as run:
+                    run.return_value.returncode = 0
+                    builder._run_pyinstaller(entry, name=entry.stem, dist=root / "dist", work=root / "work", spec=spec)
+                    command = run.call_args.args[0]
+                    self.assertEqual(Path(command[-1]), spec / entry.name)
+                    self.assertEqual((spec / entry.name).read_bytes(), entry.read_bytes())
+                    self.assertEqual(command[command.index("--paths") + 1], str(_ROOT / "src"))
 
     def test_dockerfile_does_not_pin_a_version(self):
         dockerfile = (_ROOT / "Dockerfile").read_text(encoding="utf-8")

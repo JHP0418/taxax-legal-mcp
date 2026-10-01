@@ -1,8 +1,12 @@
 # Changelog
 
+## 0.2.13 - 2026-10-01
+
+- Windows PyInstaller 빌드가 namespace `taxax` 아래의 실행 진입점 때문에 내부 `taxax.mcp`를 외부 SDK `mcp`로 오인하지 않도록, 세 진입점을 임시 빌드 디렉터리로 복사해 분석합니다.
+
 ## 0.2.12 - 2026-10-01
 
-- Windows PyInstaller의 MCP 진입점이 같은 이름의 SDK `mcp.server`를 가로채 서버가 시작되지 않던 문제를 해결했습니다.
+- Windows PyInstaller의 MCP 진입점을 다른 하위 패키지로 옮겼지만, 공개 namespace 패키지의 import 경로 충돌은 남아 있어 CI에서 MCP 기동이 실패했습니다. 0.2.13에서 빌드 진입점을 격리했습니다.
 - Windows CI의 캠페인 SQLite 테스트가 열린 DB 파일을 임시 폴더에서 삭제하려다 실패하던 문제를 해결했습니다.
 - 공개 배포에는 비공개 E2E 스크립트가 필요한 테스트를 포함하지 않습니다.
 

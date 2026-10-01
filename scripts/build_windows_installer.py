@@ -19,7 +19,7 @@ from taxax.legal.version import source_version  # noqa: E402
 
 # 빌드 산출물에는 이 체크아웃이 만들 버전을 붙인다(설치된 구버전이 아니라).
 _VERSION = source_version()
-_MCP_FROZEN_ENTRY = _ROOT / "src" / "taxax" / "legal" / "frozen_server.py"
+_MCP_FROZEN_ENTRY = _ROOT / "src" / "taxax" / "mcp" / "frozen_server.py"
 
 
 def _sha256(path: Path) -> str:
@@ -31,6 +31,8 @@ def _sha256(path: Path) -> str:
 
 
 def _run_pyinstaller(entry: Path, *, name: str, dist: Path, work: Path, spec: Path, windowed: bool = False, binaries: tuple[Path, ...] = ()) -> None:
+    staged_entry = spec / entry.name
+    shutil.copy2(entry, staged_entry)
     command = [
         sys.executable,
         "-m",
@@ -63,7 +65,7 @@ def _run_pyinstaller(entry: Path, *, name: str, dist: Path, work: Path, spec: Pa
     ]
     for binary in binaries:
         command.extend(["--add-binary", f"{binary}{os.pathsep}payload"])
-    command.append(str(entry))
+    command.append(str(staged_entry))
     completed = subprocess.run(command, cwd=_ROOT, check=False)
     if completed.returncode != 0:
         raise RuntimeError(f"PyInstaller build가 실패했습니다: {name}")

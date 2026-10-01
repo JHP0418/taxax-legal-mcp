@@ -27,8 +27,8 @@
       "sha256": "036a62a746177081a43a4bd6a06a3afdf6a27b917b3c85eecc6978878fe613c4"
     },
     "CHANGELOG.md": {
-      "bytes": 7609,
-      "sha256": "97884ec88c0f27f1cf6c9d5a376cd8d5dcfb22f62cfb93ffd154e1ba038e6ca7"
+      "bytes": 7959,
+      "sha256": "1a3f37f568c7c011d292f564f8e23991752d95af5ff4f330b5539e452446a4c5"
     },
     "Dockerfile": {
       "bytes": 1217,
@@ -72,15 +72,15 @@
     },
     "pyproject.toml": {
       "bytes": 1187,
-      "sha256": "2c8109fc1025730c6576846829dabbd24e1dceeea59528bb68d8bed9cf767dfd"
+      "sha256": "3846bfe16f998ba6c31f568239c45052fc129ccac54ee8101d06adeefc5d9a3a"
     },
     "requirements.lock": {
       "bytes": 653,
       "sha256": "9038463b770e9a4188042960a8e21b8896d0e71065a65138f0e491d0246a403d"
     },
     "scripts/build_windows_installer.py": {
-      "bytes": 5716,
-      "sha256": "31da52971744fec72e79ec9552da2be5527dbd5f77cdf1704397f7b95c0fbc45"
+      "bytes": 5796,
+      "sha256": "e2099f2148ce6e98ee0f5e7689420d441e920ef420e8d7d126563c890b5088f1"
     },
     "scripts/export_legal_public.py": {
       "bytes": 5683,
@@ -141,10 +141,6 @@
     "src/taxax/legal/frozen_cli.py": {
       "bytes": 127,
       "sha256": "98b015df69eaef0d401f0f85d5ec0425f2bdb6773b1fcfe4fd993b8aecc1e236"
-    },
-    "src/taxax/legal/frozen_server.py": {
-      "bytes": 128,
-      "sha256": "aabcbcd5ff7d9c83dcb64e02aa22cc24a1cf4c95c275105ce3f635e56f170c20"
     },
     "src/taxax/legal/frozen_setup.py": {
       "bytes": 137,
@@ -241,6 +237,10 @@
     "src/taxax/mcp/auth.py": {
       "bytes": 7886,
       "sha256": "04b17fe9458c89976e763f5f7c2bb8e76352cb2f103dd41412e874eccd56762b"
+    },
+    "src/taxax/mcp/frozen_server.py": {
+      "bytes": 128,
+      "sha256": "aabcbcd5ff7d9c83dcb64e02aa22cc24a1cf4c95c275105ce3f635e56f170c20"
     },
     "src/taxax/mcp/legal_tools.py": {
       "bytes": 5502,
@@ -339,8 +339,8 @@
       "sha256": "b469ae822a62d4350b4166ed6feb2519959c1f4174882d77263f72c78c0de6df"
     },
     "tests/test_legal_version.py": {
-      "bytes": 8132,
-      "sha256": "600e7b1a078df094c1d7ef9e12f59cc6ec7aeecdd97b446f7b2a9d006e81021e"
+      "bytes": 8953,
+      "sha256": "3fb17739b1e3ed58b3905b3a6348cca9be64b3cff789a54c4bdea30e510f209a"
     }
   },
   "format": "taxax-legal-public-allowlist-v1",
