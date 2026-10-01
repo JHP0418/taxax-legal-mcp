@@ -7,6 +7,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from email.message import Message
 from pathlib import Path
 from unittest.mock import patch
@@ -391,7 +392,7 @@ class CampaignLedgerTests(unittest.TestCase):
             attempt = ledger.reserve_http_attempt("www.law.go.kr", "E01", "owner")
             ledger.start_http_attempt(attempt.token)
             ledger.finish_http_attempt(attempt.token, status=200, error_stage="response_size")
-            with sqlite3.connect(path) as connection:
+            with closing(sqlite3.connect(path)) as connection:
                 outcome, stage = connection.execute(
                     "SELECT outcome, error_stage FROM http_attempts WHERE token=?", (attempt.token,)
                 ).fetchone()
@@ -404,7 +405,7 @@ class CampaignLedgerTests(unittest.TestCase):
             attempt = ledger.reserve_http_attempt("www.law.go.kr", "E01", "owner")
             ledger.start_http_attempt(attempt.token)
             ledger.finish_http_attempt(attempt.token, status=404)
-            with sqlite3.connect(path) as connection:
+            with closing(sqlite3.connect(path)) as connection:
                 outcome = connection.execute(
                     "SELECT outcome FROM http_attempts WHERE token=?", (attempt.token,)
                 ).fetchone()[0]

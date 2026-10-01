@@ -27,8 +27,8 @@
       "sha256": "036a62a746177081a43a4bd6a06a3afdf6a27b917b3c85eecc6978878fe613c4"
     },
     "CHANGELOG.md": {
-      "bytes": 7188,
-      "sha256": "be6590ea25b1882519aa41da3f528bac53bb9caa4fa8adf9f3f1774efa124478"
+      "bytes": 7609,
+      "sha256": "97884ec88c0f27f1cf6c9d5a376cd8d5dcfb22f62cfb93ffd154e1ba038e6ca7"
     },
     "Dockerfile": {
       "bytes": 1217,
@@ -72,15 +72,15 @@
     },
     "pyproject.toml": {
       "bytes": 1187,
-      "sha256": "0ff958186ceb181e6121fbc13037993e6676f6d6dc16cd06a54ce9c680adf705"
+      "sha256": "2c8109fc1025730c6576846829dabbd24e1dceeea59528bb68d8bed9cf767dfd"
     },
     "requirements.lock": {
       "bytes": 653,
       "sha256": "9038463b770e9a4188042960a8e21b8896d0e71065a65138f0e491d0246a403d"
     },
     "scripts/build_windows_installer.py": {
-      "bytes": 5676,
-      "sha256": "95b35aecacb997cac150ea7d88f69a1eb1530c2ac986931654fbd58b1944f420"
+      "bytes": 5716,
+      "sha256": "31da52971744fec72e79ec9552da2be5527dbd5f77cdf1704397f7b95c0fbc45"
     },
     "scripts/export_legal_public.py": {
       "bytes": 5683,
@@ -141,6 +141,10 @@
     "src/taxax/legal/frozen_cli.py": {
       "bytes": 127,
       "sha256": "98b015df69eaef0d401f0f85d5ec0425f2bdb6773b1fcfe4fd993b8aecc1e236"
+    },
+    "src/taxax/legal/frozen_server.py": {
+      "bytes": 128,
+      "sha256": "aabcbcd5ff7d9c83dcb64e02aa22cc24a1cf4c95c275105ce3f635e56f170c20"
     },
     "src/taxax/legal/frozen_setup.py": {
       "bytes": 137,
@@ -238,10 +242,6 @@
       "bytes": 7886,
       "sha256": "04b17fe9458c89976e763f5f7c2bb8e76352cb2f103dd41412e874eccd56762b"
     },
-    "src/taxax/mcp/frozen_server.py": {
-      "bytes": 128,
-      "sha256": "aabcbcd5ff7d9c83dcb64e02aa22cc24a1cf4c95c275105ce3f635e56f170c20"
-    },
     "src/taxax/mcp/legal_tools.py": {
       "bytes": 5502,
       "sha256": "6e563c860b74d26cc70190bef0d45b497f756fc82b042060082c7bd75aa505ee"
@@ -291,8 +291,8 @@
       "sha256": "ca9f48cd0507873ed2ac222b95e546cd5c15142511f939cb92f915c0610b4584"
     },
     "tests/test_legal_campaign.py": {
-      "bytes": 26018,
-      "sha256": "4c87b99d29803a8a923d1f89b50047800cc8e413d1098dd69e04c169d4cea807"
+      "bytes": 26067,
+      "sha256": "76f3ae2372985388bc48445245cd29fa9139bb1025ef6a32c4e20b5e5faff0b8"
     },
     "tests/test_legal_codex_config.py": {
       "bytes": 17807,
@@ -339,8 +339,8 @@
       "sha256": "b469ae822a62d4350b4166ed6feb2519959c1f4174882d77263f72c78c0de6df"
     },
     "tests/test_legal_version.py": {
-      "bytes": 7797,
-      "sha256": "4741aab4a0286e3281a33d949b9013f7cc36b4aed250d338f51c15a44a13b278"
+      "bytes": 8132,
+      "sha256": "600e7b1a078df094c1d7ef9e12f59cc6ec7aeecdd97b446f7b2a9d006e81021e"
     }
   },
   "format": "taxax-legal-public-allowlist-v1",

@@ -45,6 +45,13 @@ class VersionSingleSourceTests(unittest.TestCase):
         self.assertIn("_VERSION = source_version()", source)
         self.assertNotRegex(source, r'_VERSION\s*=\s*"')
 
+    def test_frozen_mcp_entry_does_not_shadow_sdk_mcp_server(self):
+        from scripts.build_windows_installer import _MCP_FROZEN_ENTRY
+
+        self.assertTrue(_MCP_FROZEN_ENTRY.is_file())
+        self.assertFalse((_MCP_FROZEN_ENTRY.parent / "server.py").exists())
+        self.assertNotEqual(_MCP_FROZEN_ENTRY.parent.name, "mcp")
+
     def test_dockerfile_does_not_pin_a_version(self):
         dockerfile = (_ROOT / "Dockerfile").read_text(encoding="utf-8")
         install_lines = [line for line in dockerfile.splitlines() if "pip install" in line and "taxax-legal-mcp" in line]
