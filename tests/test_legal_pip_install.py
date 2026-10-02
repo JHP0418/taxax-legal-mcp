@@ -88,8 +88,8 @@ class PipInstallCommandTests(unittest.TestCase):
                         with redirect_stdout(io.StringIO()) as stream:
                             code = main([*args, "install", "--no-oc", "--config", str(config)])
                         self.assertEqual(code, 0)
-                        self.assertEqual(json.loads(stream.getvalue())["data_dir"], str(expected))
-                        self.assertEqual(json.loads(config.read_text())["mcpServers"][_SERVER]["env"]["TAXAX_LEGAL_DATA_DIR"], str(expected))
+                        self.assertEqual(json.loads(stream.getvalue())["data_dir"], str(expected.resolve()))
+                        self.assertEqual(json.loads(config.read_text())["mcpServers"][_SERVER]["env"]["TAXAX_LEGAL_DATA_DIR"], str(expected.resolve()))
                         self.assertTrue(expected.is_dir())
             self.assertFalse(default_dir.exists())
 

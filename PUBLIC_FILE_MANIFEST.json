@@ -315,8 +315,8 @@
       "sha256": "3f9c1897bc7e48e85acd53e15ebeff3fbeb503e4f66780535d795e4aff3f3e0f"
     },
     "tests/test_legal_pip_install.py": {
-      "bytes": 23388,
-      "sha256": "3fb9e5bda51f3b992b23db5ba220a201258641b3eef2b79b792e1fd02007bae2"
+      "bytes": 23408,
+      "sha256": "732e8e9cc4b51571bfa4d07e07bb15cd4d99be6a715f5a600d05816fe092934a"
     },
     "tests/test_legal_providers.py": {
       "bytes": 31607,
