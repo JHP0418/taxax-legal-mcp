@@ -274,6 +274,101 @@ class NtsProviderTests(unittest.TestCase):
         self.assertEqual({section["kind"] for section in result.items[0]["sections"]}, {"gist", "answer", "references"})
         self.assertEqual(len(result.raw_responses), 2)
 
+    def test_precedent_html_editor_is_judgment_not_attachment_notice(self):
+        payload = json.loads((FIXTURES / "nts_detail.json").read_text(encoding="utf-8"))
+        record = payload["data"][DETAIL_ACTION]
+        detail = record["dcmDVO"]
+        detail.update(ntstDcmClCd="09", ntstDcmDscmCntn="수원고등법원-2025-누-688",
+                      ntstDcmCntn="판결 내용은 상세내용과 같습니다.", ntstDcmGistCntn="검색 요지")
+        record["dcmHwpEditorDVOList"] = [
+            {"dcmFleTy": "hwp", "dcmFleByte": ""},
+            {"dcmFleTy": "html", "dcmFleByte": "<html><body><table><tr><td>사 건</td><td>2025누688 증여세부과처분취소</td></tr><tr><td>판 결 선 고</td><td>2026. 1. 14.</td></tr></table><p>주 문</p><p>원고들의 항소를 모두 기각한다.</p></body></html>"},
+        ]
+        response = HttpResponse(ACTION_URL, 200, {"content-type": "application/json"}, json.dumps(payload, ensure_ascii=False).encode())
+        provider, _ = self.provider([ENTRY, response])
+        item = provider.detail("NTS001").items[0]
+        self.assertEqual(item["document_type"], "court_precedent")
+        self.assertEqual(item["case_no"], "2025누688")
+        self.assertEqual(item["decided_on"], "2026-01-14")
+        self.assertIn("원고들의 항소를 모두 기각한다.", item["sections"][-1]["text"])
+        self.assertNotIn("판결 내용은 상세내용과 같습니다.", [s["text"] for s in item["sections"]])
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = LegalKnowledgeService(root, data_dir=root / "data", nts_provider=self.provider([ENTRY, response])[0])
+            result = service.get_legal_document(provider="taxlaw.nts.go.kr", source_document_id="NTS001", refresh=True)
+            self.assertEqual(result.data["content_completeness"], "complete")
+            checked = service.verify_legal_citations(citations=[
+                {"document_id": result.data["document_id"], "locator": item["sections"][-1]["locator"], "quote": "원고들의 항소를 모두 기각한다."},
+                {"document_id": result.data["document_id"], "locator": item["sections"][-1]["locator"], "quote": "판결 내용은 상세내용과 같습니다."},
+            ])
+            self.assertEqual([c["status"] for c in checked.data["checks"]], ["verified", "mismatch"])
+
+    def test_law_go_precedent_without_body_is_served_from_matching_nts_judgment(self):
+        """법제처에 본문이 없는 국세청 출처 판례는 같은 사건번호의 국세청 판결문으로 받는다."""
+        def response(url, body):
+            return HttpResponse(url, 200, {"content-type": "application/json"}, json.dumps(body, ensure_ascii=False).encode())
+
+        class LawQueue:
+            def __init__(self, values):
+                self.values, self.calls = list(values), []
+
+            def request(self, url, *, params=None, secrets=()):
+                self.calls.append(dict(params or {}))
+                return self.values.pop(0)
+
+        law_search = response("https://www.law.go.kr/DRF/lawSearch.do", {"PrecSearch": {"page": "1", "totalCnt": "1", "prec": [
+            {"id": "1", "판례일련번호": "621227", "사건명": "비상장주식 저가 거래", "사건번호": "수원고등법원-2025-누-688",
+             "데이터출처명": "국세법령정보시스템", "선고일자": "2026.01.14"}]}})
+        no_match = response("https://www.law.go.kr/DRF/lawService.do", {"Law": "일치하는 판례가 없습니다.  판례명을 확인하여 주십시오."})
+        nts_search = response(ACTION_URL, {"data": {"ASEISA001MR01": {"searchResultVO": {"collectionList": [{"nameEn": "precedent", "totalCount": "2", "resultList": [
+            {"DOC_ID": "NTS009", "TTL": "다른 사건", "NTST_DCM_CL_NM": "판례", "NTST_DCM_DSCM_CNTN": "수원고등법원-2025-누-6880"},
+            {"DOC_ID": "NTS001", "TTL": "비상장주식 저가 거래", "NTST_DCM_CL_NM": "판례", "NTST_DCM_DSCM_CNTN": "수원고등법원-2025-누-688"},
+        ]}]}}}})
+        payload = json.loads((FIXTURES / "nts_detail.json").read_text(encoding="utf-8"))
+        record = payload["data"][DETAIL_ACTION]
+        record["dcmDVO"].update(ntstDcmClCd="09", ntstDcmDscmCntn="수원고등법원-2025-누-688", ntstDcmCntn="판결 내용은 상세내용과 같습니다.")
+        record["dcmHwpEditorDVOList"] = [{"dcmFleTy": "html", "dcmFleByte": "<html><body><p>사 건 2025누688 증여세부과처분취소</p><p>판 결 선 고 2026. 1. 14.</p><p>주 문</p><p>원고들의 항소를 모두 기각한다.</p></body></html>"}]
+        law = LawQueue([law_search, no_match])
+        nts, nts_transport = self.provider([ENTRY, nts_search, ENTRY, response(ACTION_URL, payload)])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = LegalKnowledgeService(root, data_dir=root / "data", provider=LawGoProvider(credential="operator-secret", transport=law), nts_provider=nts)
+            found = service.search_legal_sources(query="2025누688", provider="law.go.kr", target="prec", upstream=True)
+            result = service.get_legal_document(document_id=found.data["items"][0]["document_id"], refresh=True)
+            self.assertEqual(result.status, ResponseStatus.OK, result.error)
+            self.assertEqual(result.data["provider"], "taxlaw.nts.go.kr")
+            self.assertEqual(result.data["source_document_id"], "NTS001")
+            self.assertEqual((result.data["court"], result.data["case_no"], result.data["decided_on"]), ("수원고등법원", "2025누688", "2026-01-14"))
+            self.assertEqual(result.data["content_completeness"], "complete")
+            self.assertTrue(any("국세청 원문" in warning for warning in result.warnings))
+            self.assertEqual([call["type"] for call in law.calls], ["JSON", "JSON"])
+            checked = service.verify_legal_citations(citations=[
+                {"document_id": result.data["document_id"], "locator": "판결문", "quote": "원고들의 항소를 모두 기각한다.", "expected_date": "2026-01-14"},
+            ])
+            self.assertEqual(checked.data["checks"][0]["status"], "verified")
+
+    def test_precedent_without_substantive_html_stays_partial(self):
+        for html in (None, "<html><body><p>사 건 2025누688</p><p>주 문</p>"):
+            with self.subTest(html=html), tempfile.TemporaryDirectory() as directory:
+                payload = json.loads((FIXTURES / "nts_detail.json").read_text(encoding="utf-8"))
+                record = payload["data"][DETAIL_ACTION]
+                record["dcmDVO"].update(ntstDcmClCd="09", ntstDcmCntn="판결 내용은 상세내용과 같습니다.")
+                if html is not None:
+                    record["dcmHwpEditorDVOList"] = [{"dcmFleTy": "html", "dcmFleByte": html}]
+                response = HttpResponse(ACTION_URL, 200, {"content-type": "application/json"}, json.dumps(payload, ensure_ascii=False).encode())
+                root = Path(directory)
+                service = LegalKnowledgeService(root, data_dir=root / "data", nts_provider=self.provider([ENTRY, response])[0])
+                result = service.get_legal_document(provider="taxlaw.nts.go.kr", source_document_id="NTS001", refresh=True)
+                self.assertEqual(result.data["document_type"], "court_precedent")
+                self.assertEqual(result.data["content_completeness"], "partial")
+                self.assertTrue(result.data["metadata"]["preview_only"])
+                checked = service.verify_legal_citations(citations=[
+                    {"document_id": result.data["document_id"], "quote": "판결 내용은 상세내용과 같습니다."},
+                    {"document_id": result.data["document_id"], "locator": "판결문", "quote": "원고들의 항소를 모두 기각한다."},
+                ])
+                self.assertEqual([c["status"] for c in checked.data["checks"]], ["unverified", "unverified"])
+
     def test_detail_retains_observed_official_registration_date_and_document_number(self):
         payload = json.loads((FIXTURES / "nts_detail.json").read_text(encoding="utf-8"))
         detail = payload["data"][DETAIL_ACTION]["dcmDVO"]

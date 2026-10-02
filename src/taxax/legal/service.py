@@ -436,15 +436,24 @@ class LegalKnowledgeService:
                         if not isinstance(candidates, list) or len(candidates) != 1 or not isinstance(candidates[0], str) or not candidates[0]:
                             raise ProviderError(ErrorCode.INCOMPLETE_RESULT, "저장된 검색 항목에서 요청 식별자 종류를 유일하게 확인할 수 없습니다. 공식 ID 또는 MST를 명시하십시오.")
                         source_id = candidates[0]
-                    _, documents, reused = self._collect_detail(
-                        LegalTarget(target_value),
-                        identifier=source_id,
-                        identifier_kind=identifier_kind,
-                        effective_on=effective_on,
-                        article=article,
-                        response_type=response_type,
-                        run_id=run_id,
-                    )
+                    try:
+                        _, documents, reused = self._collect_detail(
+                            LegalTarget(target_value),
+                            identifier=source_id,
+                            identifier_kind=identifier_kind,
+                            effective_on=effective_on,
+                            article=article,
+                            response_type=response_type,
+                            run_id=run_id,
+                        )
+                    except ProviderError as exc:
+                        if not exc.details.get("precedent_body_unavailable"):
+                            raise
+                        documents, reused = self._nts_precedent_body(source_id, exc, run_id), False
+                        warnings.append(
+                            f"법제처 판례 {source_id}는 국세청 출처라 법제처 API에 본문이 없습니다. "
+                            f"같은 사건번호의 국세청 원문({documents[0].document_id})을 반환했습니다. 인용은 이 document_id로 하십시오."
+                        )
                 else:
                     adapter = self.nts_provider if selected_provider == self.nts_provider.name else self.olta_provider
                     category = source_category or (str(document.metadata.get("category")) if document and document.metadata.get("category") else None)
@@ -605,7 +614,7 @@ class LegalKnowledgeService:
             for item, check in zip(inputs, checks):
                 if not check.document_exists or (check.status == CitationStatus.UNVERIFIED and check.version_id is None):
                     continue
-                document = self.repository.get_document(item.document_id, version_id=check.version_id)
+                document = self.repository.get_document(item.document_id, version_id=check.version_id, locator=item.locator)
                 if document:
                     sources.append(_source(document))
             unresolved = [
@@ -971,6 +980,39 @@ class LegalKnowledgeService:
             values.update({key: filters[key] for key in allowed if key in filters})
             return values
         raise ProviderError(ErrorCode.INVALID_REQUEST, "지원하지 않는 보완 provider입니다.")
+
+    def _nts_precedent_body(self, law_go_id: str, cause: ProviderError, run_id: str | None) -> list[LegalDocument]:
+        """법제처에 본문이 없는 국세청 출처 판례를 사건번호로 국세청에서 받는다.
+
+        사건번호(예: 수원고등법원-2025-누-688)가 국세청 문서번호와 정확히 같은
+        판례 하나만 받아들인다. 비슷한 사건으로 대체하지 않는다.
+        """
+        stored = self.repository.get_document(f"law-go:{LegalTarget.PRECEDENT.value}:{law_go_id}")
+        case_no = stored.case_no if stored else None
+        parts = re.fullmatch(r".+?-(\d{4})-([가-힣]+)-(\d+)", case_no or "")
+        if not self.nts_provider.enabled or not parts:
+            reason = "국세청 출처가 비활성입니다" if parts else "저장된 검색 결과에서 국세청 형식 사건번호를 찾지 못했습니다"
+            raise ProviderError(
+                cause.code,
+                f"{cause} {reason}. provider=taxlaw.nts.go.kr, target=precedent로 사건번호를 검색해 원문을 조회하십시오.",
+                details=cause.details,
+            )
+        _, found, _ = self._collect_supplemental_search(
+            self.nts_provider, query="".join(parts.groups()), page=1, display=10,
+            run_id=f"{run_id}-nts-search" if run_id else None,
+            **self._supplemental_search_kwargs(self.nts_provider.name, {"collections": "precedent"}, True),
+        )
+        matches = [document for document in found if document.metadata.get("document_number") == case_no]
+        if len(matches) != 1:
+            raise ProviderError(
+                cause.code,
+                f"{cause} 국세청에서 사건번호 {case_no}와 정확히 일치하는 판례를 {len(matches)}건 찾았습니다. 원문으로 대체하지 않았습니다.",
+                details=cause.details,
+            )
+        _, documents, _ = self._collect_supplemental_detail(
+            self.nts_provider, action="detail", source_document_id=matches[0].source_document_id, run_id=run_id,
+        )
+        return documents
 
     def _collect_supplemental_search(self, adapter, **kwargs) -> tuple[SupplementalResult, list[LegalDocument], bool]:
         run_id = kwargs.pop("run_id", None)

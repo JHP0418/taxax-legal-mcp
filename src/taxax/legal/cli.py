@@ -193,6 +193,9 @@ def _prompt_credential() -> str | None:
 
 def run_install(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
     credential = None if arguments.no_oc else (arguments.oc or _prompt_credential())
+    # Claude Desktop이 없는 OS(리눅스)에서 기본 등록 실패가 Codex 등록까지 막지 않게 한다.
+    if arguments.config is None and sys.platform not in ("win32", "darwin"):
+        arguments.skip_claude = True
     try:
         result = install_pip_application(
             config_path=arguments.config,

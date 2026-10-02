@@ -236,6 +236,21 @@ class CodexStopHookTests(unittest.TestCase):
         self.assertEqual(evaluate_stop({**event, "last_assistant_message": "테스트 385개 통과"}, {"enabled": True, "max_rechecks": 1}), {})
         self.assertEqual(evaluate_stop({**event, "last_assistant_message": None}, {"enabled": True, "max_rechecks": 1}), {})
 
+    def test_unlisted_stock_valuation_claim_requires_recheck(self):
+        event = {"hook_event_name": "Stop", "last_assistant_message": "비상장주식은 최근 매매가격을 언제나 그대로 쓰면 됩니다.", "stop_hook_active": False}
+        settings = {"enabled": True, "max_rechecks": 1}
+        self.assertEqual(evaluate_stop(event, settings)["decision"], "block")
+        self.assertEqual(evaluate_stop({**event, "stop_hook_active": True}, settings), {})
+        for answer in (
+            "특수관계인 거래는 시가로 다시 계산하면 됩니다.",
+            "이 경우 가산세는 나오지 않습니다.",
+            "원천징수는 지급일이 속하는 달의 다음 달 10일까지 내면 됩니다.",
+            "자녀에게 넘긴 아파트는 증여로 보지 않습니다.",
+        ):
+            self.assertEqual(evaluate_stop({**event, "last_assistant_message": answer}, settings)["decision"], "block", answer)
+        for answer in ("테스트 385개 통과", "모델 성능 평가 결과를 정리했습니다.", "빌드와 배포를 마쳤습니다."):
+            self.assertEqual(evaluate_stop({**event, "last_assistant_message": answer}, settings), {}, answer)
+
     def test_register_preserves_unrelated_hooks_is_idempotent_and_uninstalls_only_ours(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

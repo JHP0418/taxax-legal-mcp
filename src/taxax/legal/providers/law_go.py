@@ -24,7 +24,7 @@ from .base import LegalTarget, ProviderError, ProviderResult, TargetContract
 SEARCH_ENDPOINT = "https://www.law.go.kr/DRF/lawSearch.do"
 DETAIL_ENDPOINT = "https://www.law.go.kr/DRF/lawService.do"
 GUIDE_BASE = "https://open.law.go.kr/LSO/openApi/guideResult.do?htmlName="
-PARSER_VERSION = "law-go-v3"
+PARSER_VERSION = "law-go-v4"
 
 COMMON_LIST_FILTERS = frozenset({"search", "query", "display", "page", "sort", "gana", "popYn"})
 # 법제처가 부여한 숫자 식별자만 받는 자리. admrul의 LM은 법령명을 받으므로 뺀다.
@@ -240,7 +240,7 @@ def parse_response(response: HttpResponse, expected_type: str, *, secrets: tuple
             if re.search(r"<!DOCTYPE|<!ENTITY", text, re.IGNORECASE):
                 raise ProviderError(ErrorCode.PARSE_ERROR, "외부 엔티티 선언이 포함된 XML은 거부합니다.")
             root = ET.fromstring(text)
-            payload = {root.tag: _flatten_xml(root)}
+            payload = {root.tag: _flatten_xml(root) if list(root) else (root.text or "").strip()}
         else:
             raise ProviderError(ErrorCode.PARSE_ERROR, "지원되지 않는 공식 API 응답 형식입니다.")
     except ProviderError:
@@ -308,6 +308,10 @@ def _identifier_values(mapping: Mapping[str, Any]) -> dict[str, list[str]]:
                 scalar = _scalar(candidate)
                 if scalar and scalar not in found:
                     found.append(scalar)
+            # 별칭은 구체적인 것부터 둔다. 목록 응답의 "id"는 결과 순번(1, 2…)이라
+            # 판례일련번호를 찾은 뒤에도 섞으면 식별자가 둘이 되어 상세 조회가 막힌다.
+            if found:
+                break
         if found:
             values[kind] = found
     return values
@@ -360,8 +364,11 @@ def _article_sections(payload: Any) -> list[dict[str, Any]]:
 
 def extract_items(payload: Any, target: LegalTarget) -> tuple[list[dict[str, Any]], int | None, int | None]:
     mappings = list(_walk_mappings(payload))
+    # 응답 전체를 합친 mapping은 상세 응답처럼 한 문서가 여러 블록에 나뉜
+    # 경우를 위한 것이다. 목록 응답에서는 다른 판례의 값(법원명 등)이 섞이므로
+    # 맨 뒤에 두어 절 수가 더 많을 때만 실제 항목을 대신하게 한다.
     if isinstance(payload, Mapping):
-        mappings.insert(0, _collapse_mapping(payload))
+        mappings.append(_collapse_mapping(payload))
     total = None
     page = None
     for mapping in mappings:
@@ -545,10 +552,7 @@ class LawGoProvider:
         parsed = parse_response(response, response_type, secrets=(self.credential or "",))
         items, _, _ = extract_items(parsed, target)
         if not items:
-            # 본문 대신 짧은 안내 문자열만 오는 경우가 있다. 예를 들어 국세청이
-            # 출처인 판례는 공식 가이드상 HTML로만 본문을 제공해서, JSON/XML로
-            # 요청하면 "일치하는 판례가 없습니다"라는 문자열이 돌아온다. 그
-            # 문구를 그대로 실어야 호출자가 원인을 알 수 있다.
+            # 본문 대신 짧은 안내 문자열만 오는 경우 원인을 그대로 전달한다.
             upstream_message = next(
                 (value.strip() for value in parsed.values() if isinstance(value, str) and value.strip()),
                 None,
@@ -556,7 +560,11 @@ class LawGoProvider:
             message = "상세 응답에서 문서 식별자와 제목을 확인하지 못했습니다."
             if upstream_message:
                 message = f"{message} (법제처 응답: {upstream_message[:200]})"
-            raise ProviderError(ErrorCode.INCOMPLETE_RESULT, message)
+            # 국세청이 출처인 판례는 JSON/XML 본문이 없고, HTML로 요청해도 법제처
+            # 웹페이지를 띄우는 iframe 껍데기만 온다(2026-10-02 판례 621227 실측).
+            # 본문은 국세청 원문에서 받아야 하므로 호출자가 그쪽으로 넘기게 표시한다.
+            no_match = target == LegalTarget.PRECEDENT and bool(upstream_message) and upstream_message.startswith("일치하는 판례가 없습니다")
+            raise ProviderError(ErrorCode.INCOMPLETE_RESULT, message, details={"precedent_body_unavailable": True} if no_match else None)
         available = sorted({key for item in items for key in item.get("metadata", {}).get("upstream_identifiers", {})})
         matching = [
             item

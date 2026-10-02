@@ -275,7 +275,7 @@ class LegalRepository:
                 )
             connection.commit()
 
-    def get_document(self, document_id: str, *, version_id: str | None = None) -> LegalDocument | None:
+    def get_document(self, document_id: str, *, version_id: str | None = None, locator: str | None = None) -> LegalDocument | None:
         query = "SELECT document_json FROM legal_documents WHERE document_id=?"
         params: list[Any] = [document_id]
         if version_id is not None:
@@ -286,9 +286,22 @@ class LegalRepository:
         # 수집된 미리보기가 먼저 받아둔 원문을 가린다. 실제로 10,137자짜리
         # 헌재결정문이 108자 요약에 가려져 있었다. 같은 문서를 인용해도 조회
         # 시점에 따라 본문 대신 요약 한 줄을 받게 된다.
+        # 인용 위치가 있으면 그 절을 가진 스냅샷을 먼저 고른다. 조문별로
+        # 받은 원문을 합치면 한 raw_sha256/snapshot_ref에 다른 원문을 잘못
+        # 귀속하게 되므로 저장본 하나만 반환하고 partial 상태도 보존한다.
+        # 위치가 없거나 일치하는 절이 없으면 기존 본문 우선순위를 유지한다.
+        query += " ORDER BY "
+        if locator:
+            query += (
+                "CASE WHEN EXISTS (SELECT 1 FROM json_each(document_json, '$.sections') AS section"
+                " WHERE json_extract(section.value, '$.locator') = ?"
+                " OR json_extract(section.value, '$.section_id') = ?"
+                " OR json_extract(section.value, '$.heading') = ?) THEN 0 ELSE 1 END,"
+            )
+            params.extend([locator, locator, locator])
         # 완전한 본문을 먼저 고르고, 그 안에서 최신을 고른다.
         query += (
-            " ORDER BY CASE WHEN json_extract(document_json, '$.content_completeness') = 'complete'"
+            "CASE WHEN json_extract(document_json, '$.content_completeness') = 'complete'"
             " AND COALESCE(json_extract(document_json, '$.metadata.preview_only'), 0) IN (0, 'false') THEN 0 ELSE 1 END,"
             " retrieved_at DESC, record_id DESC LIMIT 1"
         )

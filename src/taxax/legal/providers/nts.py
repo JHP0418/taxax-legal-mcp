@@ -6,6 +6,7 @@ import re
 import time
 from dataclasses import replace
 from datetime import date
+from html.parser import HTMLParser
 from typing import Any, Callable, Mapping
 from urllib.parse import urlencode, urlparse
 
@@ -53,6 +54,53 @@ def _walk(value: Any):
 
 
 _HIGHLIGHT_MARKUP = re.compile(r"<!HS>|<!HE>")
+
+
+class _JudgmentText(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.skipped = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in {"head", "script", "style"}:
+            self.skipped += 1
+        elif not self.skipped and tag in {"br", "p", "div", "tr", "td", "hr"}:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"head", "script", "style"} and self.skipped:
+            self.skipped -= 1
+        elif not self.skipped and tag in {"p", "div", "tr", "td"}:
+            self.parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if not self.skipped:
+            self.parts.append(data)
+
+
+def _judgment_html(action: Mapping[str, Any]) -> str | None:
+    editors = action.get("dcmHwpEditorDVOList")
+    if not isinstance(editors, list):
+        return None
+    for editor in editors:
+        if not isinstance(editor, Mapping) or str(editor.get("dcmFleTy") or "").lower() != "html":
+            continue
+        html = editor.get("dcmFleByte")
+        if not isinstance(html, str) or not re.search(r"<html\b", html[:512], re.I) or not re.search(r"</html\s*>\s*$", html, re.I):
+            continue
+        parser = _JudgmentText()
+        parser.feed(html)
+        text = "\n".join(line.strip() for line in re.sub(r"[ \t\u00a0]+", " ", "".join(parser.parts)).splitlines() if line.strip())
+        if re.search(r"주\s*문", text) and re.search(r"\d{4}[가-힣]{1,5}\d+", text):
+            return text
+    return None
+
+
+def _court_case(number: str | None) -> tuple[str | None, str | None]:
+    """국세청 판례 문서번호 '수원고등법원-2025-누-688'을 (법원, '2025누688')로 나눈다."""
+    parts = re.fullmatch(r"\s*([^\-]+?)-(\d{4})-([가-힣]+)-(\d+)\s*", number or "")
+    return (parts[1], f"{parts[2]}{parts[3]}{parts[4]}") if parts else (None, None)
 
 
 def strip_highlight_markup(value: str) -> str:
@@ -123,11 +171,15 @@ def _normalize_item(item: Mapping[str, Any], collection: str) -> dict[str, Any]:
     sections = []
     if summary:
         sections.append({"section_id": "summary-1", "kind": "summary", "heading": "검색 요약", "locator": "search-result", "text": summary, "derived": False, "source_field": "GIST_CNTN"})
+    document_type = _document_type(collection, item)
+    court, case_no = _court_case(_first(item, "NTST_DCM_DSCM_CNTN", "ntstDcmDscmCntn")) if document_type == "court_precedent" else (None, None)
     return {
         "source_document_id": source_id,
         "title": title,
-        "document_type": _document_type(collection, item),
+        "document_type": document_type,
         "issuer": "국세청",
+        "court": court,
+        "case_no": case_no,
         "registered_at": registered,
         "interpreted_on": _date(_first(item, "EXPL_YD", "explYd", "interpretedOn")),
         "official_url": f"{BASE_URL}/qt/USEQTA002P.do?{urlencode({'ntstDcmId': source_id})}",
@@ -342,11 +394,14 @@ class NtsProvider:
             headers={"X-Requested-With": "XMLHttpRequest", "Referer": page_url},
         )
         payload = _json(response)
-        detail = payload["data"].get(DETAIL_ACTION, {}).get("dcmDVO")
+        action = payload["data"].get(DETAIL_ACTION, {})
+        detail = action.get("dcmDVO")
         if not isinstance(detail, Mapping) or str(detail.get("ntstDcmId") or "") != document_id:
             raise ProviderError(ErrorCode.INCOMPLETE_RESULT, "요청 NTS 문서 ID와 상세 응답이 일치하지 않습니다.")
         title = _first(detail, "ntstDcmTtl", "ntstDcmNm", "ttl", "TTL", "title", "sj") or f"NTS 공개 문서 {document_id}"
         sections = []
+        precedent = str(detail.get("ntstDcmClCd") or "") == "09" or "판례" in str(detail.get("ntstDcmClNm") or "")
+        judgment = _judgment_html(action) if precedent else None
         # 실제 상세 응답(dcmDVO)에서 관찰된 필드명. 문서 유형(ntstDcmClCd)에 따라
         # 일부 필드가 비어 있을 수 있어 alias 여러 개를 순서대로 시도한다.
         aliases = (
@@ -359,14 +414,24 @@ class NtsProvider:
             for mapping in flattened:
                 value = _first(mapping, *fields)
                 if value:
+                    if precedent and kind == "answer" and re.match(r"^판결\s*내용은\s*(?:상세내용|붙임|첨부)", value):
+                        break
                     sections.append({"section_id": f"{kind}-{len(sections) + 1}", "kind": kind, "heading": fields[0], "locator": fields[0], "text": value, "derived": False, "source_field": fields[0]})
                     break
+        if judgment:
+            sections.append({"section_id": "judgment-1", "kind": "judgment", "heading": "판결문", "locator": "판결문", "text": judgment, "derived": False, "source_field": "dcmHwpEditorDVOList.dcmFleByte"})
+        court, case_no = _court_case(_first(detail, "ntstDcmDscmCntn")) if precedent else (None, None)
+        case = re.search(r"\d{4}[가-힣]{1,5}\d+", judgment or "")
+        judgment_date = re.search(r"판\s*결\s*선\s*고\s*(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\.?", judgment or "")
         registered = _date(_first(detail, "ntstDcmRgtDt", "dcmRgtDtm", "DCM_RGT_DTM_S", "date"))
         item = {
             "source_document_id": document_id,
             "title": title,
-            "document_type": _document_type("question", detail),
+            "document_type": "court_precedent" if precedent else _document_type("question", detail),
             "issuer": "국세청",
+            "court": court,
+            "case_no": case_no or (case.group(0) if case else None),
+            "decided_on": _date(f"{judgment_date[1]}{int(judgment_date[2]):02d}{int(judgment_date[3]):02d}") if judgment_date else None,
             "registered_at": registered,
             "interpreted_on": _date(_first(detail, "explYd", "interpretedOn")),
             "official_url": page_url,
@@ -376,7 +441,7 @@ class NtsProvider:
                 "document_number": _first(detail, "ntstDcmDscmCntn", "NTST_DCM_DSCM_CNTN"),
                 "file_id": _first(detail, "ntstFleId", "NTST_FLE_ID"),
                 "tax_scope": "national",
-                "preview_only": False,
+                "preview_only": bool(precedent and not judgment),
                 "raw_response_index": 1,
                 "parser_version": PARSER_VERSION,
             },

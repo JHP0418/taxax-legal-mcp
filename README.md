@@ -4,6 +4,29 @@
 
 이 공개 package에는 TAXax 회계 engine, 고객 DB, `knowledge/`, 수집 원문, 사설 K-AR 자료가 포함되지 않습니다. GitHub 저장소는 source와 self-host 예제를 제공할 뿐 무료 hosted 운영 서버를 제공하지 않습니다.
 
+## 가장 쉬운 설치 — 에이전트에게 맡기기
+
+ChatGPT 데스크톱(Codex·로컬 Work) 또는 Claude 데스크톱의 Code 탭처럼 **명령을 실행할 수 있는 에이전트**에게 아래 문장을 그대로 붙여넣으십시오.
+
+```text
+https://github.com/JHP0418/taxax-legal-mcp 의 README "에이전트 설치 절차"를 그대로 따라 TAXax 법률 MCP를 설치(이미 있으면 업데이트)해 줘.
+```
+
+설치 중 에이전트가 **법제처 OC 인증키**를 물으면 알려주십시오(없으면 "없음"이라고 답하면 됩니다. [open.law.go.kr](https://open.law.go.kr)에서 무료로 발급). 설치가 끝나면 사람이 할 일은 두 가지뿐입니다: **앱 완전 종료 후 재시작**, Codex/Work에서 **설정 → Hook에서 `TAXax legal answer recheck` 신뢰**.
+
+> Claude **Cowork**와 ChatGPT **웹·클라우드 Work**는 내 PC에 설치한 MCP를 쓰지 못합니다. 이 설치는 ChatGPT 데스크톱의 Codex·로컬 Work, Claude 데스크톱 일반 대화, Claude Code에서 동작합니다.
+
+### 에이전트 설치 절차
+
+에이전트는 아래 순서를 그대로 실행하고, 각 단계의 실제 출력으로 성공을 판정한다. 실패를 추측으로 넘기지 않는다.
+
+1. **Python 3.11 이상 확인.** `python --version`(Windows에서 `python`이 없으면 `py -3 --version`). 없거나 3.11 미만이면 Windows는 `winget install -e --id Python.Python.3.12 --scope user`, macOS는 `brew install python@3.12`로 설치한 뒤 새 셸에서 다시 확인한다. 이후 단계의 `python`은 확인된 실행 파일로 바꿔 쓴다.
+2. **설치·업데이트.** `python -m pip install --upgrade https://github.com/JHP0418/taxax-legal-mcp/archive/refs/heads/main.zip`
+3. **OC 키 확인.** 사용자에게 법제처 OC 인증키를 묻는다. 키를 대신 만들거나 추측하지 않는다.
+4. **등록.** 키가 있으면 `python -m taxax.legal install --codex --force --oc <키>`, 없으면 `python -m taxax.legal install --codex --force --no-oc`. Claude Desktop과 Codex(ChatGPT 데스크톱 앱 공용 설정)에 함께 등록되고 기존 설정은 백업 후 TAXax 항목만 바뀐다. Claude Code도 쓰면 `--claude-code`를 덧붙인다. 샌드박스가 홈 폴더 설정 쓰기를 막으면 사용자 승인을 요청한다.
+5. **진단.** `python -m taxax.legal doctor`의 결과를 그대로 보여준다.
+6. **사용자에게 안내.** (a) 앱을 완전히 종료 후 재시작, (b) Codex/Work는 **설정 → Hook → 사용자 구성**에서 `TAXax legal answer recheck` 검토·신뢰, (c) 재시작 후 새 대화에서 "taxax-legal의 get_source_status를 1회 호출해 줘"로 실제 연결 확인. 이 세 가지는 에이전트가 대신 완료했다고 보고하지 않는다.
+
 ## 설치 (Windows 기준, 5단계)
 
 터미널 입력은 2줄뿐입니다.

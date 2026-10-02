@@ -72,8 +72,10 @@ def default_install_root() -> Path:
 
 
 def default_claude_desktop_config() -> Path:
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
     if os.name != "nt":
-        raise InstallationError("Claude Desktop 자동 등록은 Windows installer에서만 지원합니다.")
+        raise InstallationError("Claude Desktop 자동 등록은 Windows·macOS에서만 지원합니다.")
     configured = os.environ.get("APPDATA", "").strip()
     base = Path(configured).expanduser() if configured else Path.home() / "AppData" / "Roaming"
     return base / "Claude" / "claude_desktop_config.json"

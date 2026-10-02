@@ -198,6 +198,70 @@ class LawGoProviderTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, ErrorCode.INCOMPLETE_RESULT)
         self.assertNotIn("12345", str(caught.exception.details))
 
+    def test_precedent_no_match_marks_body_unavailable_without_html_retry(self):
+        """국세청 출처 판례는 HTML로 요청해도 iframe 껍데기만 온다(2026-10-02 실측).
+
+        재요청하지 않고, 서비스가 국세청 원문으로 넘길 수 있게 표시만 한다.
+        """
+        for response_type, body in (
+            ("JSON", json.dumps({"Law": "일치하는 판례가 없습니다.  판례명을 확인하여 주십시오."}, ensure_ascii=False).encode()),
+            ("XML", "<PrecService>일치하는 판례가 없습니다</PrecService>".encode()),
+        ):
+            with self.subTest(response_type=response_type):
+                transport = FixtureTransport(body, f"application/{response_type.lower()}")
+                provider = LawGoProvider(credential="operator-secret", transport=transport)
+                with self.assertRaises(ProviderError) as caught:
+                    provider.detail(LegalTarget.PRECEDENT, identifier="621227", response_type=response_type)
+                self.assertEqual(caught.exception.code, ErrorCode.INCOMPLETE_RESULT)
+                self.assertTrue(caught.exception.details["precedent_body_unavailable"])
+                self.assertEqual([call[1]["type"] for call in transport.calls], [response_type])
+
+    def test_precedent_other_failures_do_not_request_html(self):
+        for body, code in (
+            (b"<html><body>login required</body></html>", ErrorCode.AUTH_FAILED),
+            (b'{"PrecService":"no matching document"}', ErrorCode.INCOMPLETE_RESULT),
+            (b'{"PrecService":{"totalCnt":0}}', ErrorCode.INCOMPLETE_RESULT),
+        ):
+            with self.subTest(code=code):
+                transport = FixtureTransport(body)
+                provider = LawGoProvider(credential="operator-secret", transport=transport)
+                with self.assertRaises(ProviderError) as caught:
+                    provider.detail(LegalTarget.PRECEDENT, identifier="12345")
+                self.assertEqual(caught.exception.code, code)
+                self.assertEqual(len(transport.calls), 1)
+
+    def test_precedent_regular_json_detail_does_not_request_html(self):
+        payload = {"PrecService": {"판례정보일련번호": "12345", "사건명": "상속세부과처분취소",
+                                   "사건번호": "2021두53320", "선고일자": "20250109", "판례내용": "주문과 이유"}}
+        transport = FixtureTransport(json.dumps(payload, ensure_ascii=False).encode())
+        result = LawGoProvider(credential="operator-secret", transport=transport).detail(LegalTarget.PRECEDENT, identifier="12345")
+        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual(result.items[0]["case_no"], "2021두53320")
+        self.assertEqual(result.items[0]["decided_on"], "2025-01-09")
+        self.assertEqual(result.items[0]["sections"][0]["text"], "주문과 이유")
+        self.assertEqual(result.parsed, payload)
+        self.assertNotIn("OC", result.request_parameters)
+
+    def test_html_detail_is_not_requested(self):
+        provider, transport = self.provider("error_login.html", "text/html")
+        with self.assertRaises(ProviderError) as caught:
+            provider.detail(LegalTarget.PRECEDENT, identifier="12345", response_type="HTML")
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_REQUEST)
+        self.assertEqual(transport.calls, [])
+
+    def test_search_rows_do_not_borrow_fields_or_row_numbers_from_other_rows(self):
+        """목록의 'id'는 순번이고, 법원명이 빈 행에 다른 행의 법원명이 섞이면 안 된다."""
+        payload = {"PrecSearch": {"page": "1", "totalCnt": "2", "prec": [
+            {"id": "1", "판례일련번호": "621227", "사건명": "비상장주식 저가 거래", "사건번호": "수원고등법원-2025-누-688",
+             "데이터출처명": "국세법령정보시스템", "법원명": "", "선고일자": "2026.01.14"},
+            {"id": "2", "판례일련번호": "199290", "사건명": "택지초과소유부담금과처분취소", "사건번호": "94누3735",
+             "데이터출처명": "대법원", "법원명": "대법원", "선고일자": "1995.05.26"},
+        ]}}
+        items, _, _ = extract_items(payload, LegalTarget.PRECEDENT)
+        first = next(item for item in items if item["source_document_id"] == "621227")
+        self.assertIsNone(first["court"])
+        self.assertEqual(first["metadata"]["upstream_identifiers"]["ID"], ["621227"])
+
     def test_nts_interpretation_is_index_only_and_keeps_the_body_link(self):
         """법제처는 국세청 법령해석을 색인만 제공하고 본문은 갖고 있지 않다.
 

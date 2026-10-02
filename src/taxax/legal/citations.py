@@ -36,7 +36,7 @@ def verify_citations(citations: Iterable[CitationInput], lookup) -> list[Citatio
     checks: list[CitationCheck] = []
     for citation in citations:
         try:
-            document: LegalDocument | None = lookup(citation.document_id, version_id=citation.version_id)
+            document: LegalDocument | None = lookup(citation.document_id, version_id=citation.version_id, locator=citation.locator)
         except AmbiguousDocumentVersion as exc:
             checks.append(CitationCheck(
                 document_id=citation.document_id, status=CitationStatus.UNVERIFIED,

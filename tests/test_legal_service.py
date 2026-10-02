@@ -657,6 +657,91 @@ class LegalServiceTests(unittest.TestCase):
             self.assertEqual(mismatch.error.code, ErrorCode.INVALID_REQUEST)
             self.assertEqual(len(transport.calls), calls_before)
 
+    def test_partial_article_cache_selects_cited_snapshot_without_merging_versions(self):
+        from taxax.legal.repository import AmbiguousDocumentVersion
+
+        for order in ((35, 60), (60, 35)):
+            with self.subTest(order=order), tempfile.TemporaryDirectory() as directory:
+                service, transport = self.make_service(Path(directory))
+                document_id = "law-go:law:article-cache"
+                originals = {}
+
+                def save_article(article, version, index):
+                    run_id = f"run-{index}"
+                    retrieved_at = f"2026-09-17T00:00:0{index}Z"
+                    digest = hashlib.sha256(f"{article}:{version}".encode()).hexdigest()
+                    snapshot_ref = f"v1/raw/{digest}.json"
+                    service.repository.start_run(
+                        provider="law.go.kr", action="detail", request={"article": article, "version": version},
+                        started_at=retrieved_at, run_id=run_id,
+                    )
+                    document = LegalDocument(
+                        provider="law.go.kr", document_type="law", source_document_id="article-cache",
+                        document_id=document_id, version_id=version, title="합성 법률",
+                        retrieved_at=retrieved_at, raw_sha256=digest, snapshot_ref=snapshot_ref,
+                        parser_version="fixture-v1", collection_run_id=run_id,
+                        retrieval_status=RetrievalStatus.PARTIAL, content_completeness=ContentCompleteness.PARTIAL,
+                        sections=[TextSection(section_id="articles-1", kind="articles", locator=f"제{article}조",
+                                              text=f"제{article}조(합성)\n① {version} 시행본 제{article}조의 본문이다.")],
+                    )
+                    service.repository.save_result(
+                        SourceSnapshot(
+                            snapshot_id=f"snap-{index}", provider="law.go.kr", source_document_id="article-cache",
+                            raw_sha256=digest, snapshot_ref=snapshot_ref, parser_version="fixture-v1",
+                            retrieved_at=retrieved_at, retrieval_status=RetrievalStatus.PARTIAL,
+                            content_completeness=ContentCompleteness.PARTIAL, run_id=run_id, byte_length=1,
+                        ), [document],
+                    )
+                    return document
+
+                for index, article in enumerate(order, 1):
+                    originals[article] = save_article(article, "100", index)
+                for article in order:
+                    selected = service.repository.get_document(document_id, version_id="100", locator=f"제{article}조")
+                    self.assertEqual(selected.model_dump(), originals[article].model_dump())
+                checked = service.verify_legal_citations(citations=[
+                    {"document_id": document_id, "version_id": "100", "locator": f"제{article}조",
+                     "quote": f"100 시행본 제{article}조의 본문이다."} for article in order
+                ])
+                self.assertEqual(len(checked.data["checks"]), 2)
+                self.assertEqual(len(checked.sources), 2)
+                for check, source, article in zip(checked.data["checks"], checked.sources, order):
+                    self.assertTrue(check["quote_matches"])
+                    self.assertTrue(check["locator_matches"])
+                    self.assertEqual(check["status"], "unverified")
+                    self.assertEqual(source.raw_sha256, originals[article].raw_sha256)
+                    self.assertEqual(source.snapshot_ref, originals[article].snapshot_ref)
+                self.assertFalse(checked.data["legal_conclusion_verified"])
+                cached = service.get_legal_document(document_id=document_id, version_id="100")
+                self.assertEqual(cached.status, ResponseStatus.PARTIAL)
+                self.assertEqual(cached.data["content_completeness"], "partial")
+                self.assertEqual(len(cached.data["sections"]), 1)
+                save_article(60, "200", 3)
+                with self.assertRaises(AmbiguousDocumentVersion):
+                    service.repository.get_document(document_id, locator="제35조")
+                ambiguous = service.verify_legal_citations(citations=[
+                    {"document_id": document_id, "locator": "제35조", "quote": "100 시행본"}
+                ])
+                self.assertEqual(ambiguous.data["checks"][0]["status"], "unverified")
+                self.assertIsNone(ambiguous.data["checks"][0]["quote_matches"])
+                self.assertFalse(ambiguous.sources)
+                selected = service.repository.get_document(document_id, version_id="100", locator="제60조")
+                self.assertEqual(selected.raw_sha256, originals[60].raw_sha256)
+                other_version = service.verify_legal_citations(citations=[
+                    {"document_id": document_id, "version_id": "200", "locator": "제60조", "quote": "100 시행본"}
+                ])
+                self.assertFalse(other_version.data["checks"][0]["quote_matches"])
+                self.assertEqual(other_version.sources[0].version_id, "200")
+                for article in order:
+                    saved = service.repository.documents_for_run(originals[article].collection_run_id)
+                    self.assertEqual(saved[0].model_dump(), originals[article].model_dump())
+                missing_locator = service.repository.get_document(document_id, version_id="100", locator="제99조")
+                self.assertEqual(missing_locator.raw_sha256, originals[order[-1]].raw_sha256)
+                self.assertIsNone(service.repository.get_document(document_id, version_id="missing", locator="제60조"))
+                self.assertEqual(service.repository.source_status()["documents"], 3)
+                self.assertEqual(service.repository.source_status()["snapshots"], 3)
+                self.assertEqual(transport.calls, [])
+
     def test_incomplete_preview_citation_is_unverified(self):
         with tempfile.TemporaryDirectory() as directory:
             service, _ = self.make_service(Path(directory))
