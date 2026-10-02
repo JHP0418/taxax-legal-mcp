@@ -27,8 +27,8 @@
       "sha256": "036a62a746177081a43a4bd6a06a3afdf6a27b917b3c85eecc6978878fe613c4"
     },
     "CHANGELOG.md": {
-      "bytes": 7959,
-      "sha256": "1a3f37f568c7c011d292f564f8e23991752d95af5ff4f330b5539e452446a4c5"
+      "bytes": 8209,
+      "sha256": "a41d8b01df63050508e4522f5fd34b9b079bb304a50c34ab6ca6a2220da14d4c"
     },
     "Dockerfile": {
       "bytes": 1217,
@@ -47,8 +47,8 @@
       "sha256": "092cac6222afe78bb3f31435c2dd59a08541d29bdd913a91c278d1043e31d3fe"
     },
     "README.md": {
-      "bytes": 21920,
-      "sha256": "c90d9389d16988c32f4d111cd4200d8d5e008e81956f931e792e365f469742e4"
+      "bytes": 22153,
+      "sha256": "ca1108996c65ae659b8628517e7c3176d82eac541ad25ac3c0a9be856eda2f33"
     },
     "THIRD_PARTY_NOTICES.md": {
       "bytes": 1759,
@@ -72,7 +72,7 @@
     },
     "pyproject.toml": {
       "bytes": 1187,
-      "sha256": "3846bfe16f998ba6c31f568239c45052fc129ccac54ee8101d06adeefc5d9a3a"
+      "sha256": "d49d75d1b090784af76d65a5fdd0aacbdf45b4e8215e0df9da3b8b73538b292d"
     },
     "requirements.lock": {
       "bytes": 653,
@@ -119,8 +119,8 @@
       "sha256": "0cf9db9b6ad40026a8f0ea2f56b1242c606ba5fb8f564dd38790110b8243d442"
     },
     "src/taxax/legal/cli.py": {
-      "bytes": 21001,
-      "sha256": "e894d7de85fc7da20ac90535cd81d21871f7360ef7c325666383895712e53fdd"
+      "bytes": 21042,
+      "sha256": "87509a180349a2316d9151e0f7cf0d5ea317a37c16f1e4e7ecfdedffe4b4a414"
     },
     "src/taxax/legal/codex_config.py": {
       "bytes": 8807,
@@ -147,8 +147,8 @@
       "sha256": "06bfc06ee8d6ef69cc9f411b2a34bc4fb1e5979067287697e68a47875da1c307"
     },
     "src/taxax/legal/installer.py": {
-      "bytes": 28313,
-      "sha256": "bd9fff099133155d0ec6d27beb6ab7b3e4f57ed6b55cdb39403d8c07b74eac54"
+      "bytes": 28620,
+      "sha256": "8a9838afc2502aac552ed5a644951d1806037dff92f4d7d7879b78b282575a7c"
     },
     "src/taxax/legal/local_config.py": {
       "bytes": 24499,
@@ -315,8 +315,8 @@
       "sha256": "3f9c1897bc7e48e85acd53e15ebeff3fbeb503e4f66780535d795e4aff3f3e0f"
     },
     "tests/test_legal_pip_install.py": {
-      "bytes": 22013,
-      "sha256": "2dfe1b315b9eb90b0ba7b4bd4da86cfe55bd01b64353e45200fb150cf0b81f35"
+      "bytes": 23388,
+      "sha256": "3fb9e5bda51f3b992b23db5ba220a201258641b3eef2b79b792e1fd02007bae2"
     },
     "tests/test_legal_providers.py": {
       "bytes": 31607,

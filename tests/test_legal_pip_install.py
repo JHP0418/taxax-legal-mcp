@@ -71,6 +71,28 @@ class PipInstallCommandTests(unittest.TestCase):
             self.assertEqual(entry["args"], ["--transport", "stdio"])
             self.assertEqual(entry["env"]["TAXAX_LEGAL_DATA_DIR"], str(data_dir.resolve()))
 
+    def test_install_registers_selected_data_dir_instead_of_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scripts, default_dir, _ = self._environment(root)
+            environment_dir = root / "environment-data"
+            explicit_dir = root / "explicit-data"
+            a, b, c = self._patches(scripts, default_dir)
+            with a, b, c, patch.dict(os.environ, {"TAXAX_LEGAL_DATA_DIR": str(environment_dir)}):
+                for label, args, expected in (
+                    ("environment", [], environment_dir),
+                    ("explicit", ["--data-dir", str(explicit_dir)], explicit_dir),
+                ):
+                    with self.subTest(label=label):
+                        config = root / f"{label}.json"
+                        with redirect_stdout(io.StringIO()) as stream:
+                            code = main([*args, "install", "--no-oc", "--config", str(config)])
+                        self.assertEqual(code, 0)
+                        self.assertEqual(json.loads(stream.getvalue())["data_dir"], str(expected))
+                        self.assertEqual(json.loads(config.read_text())["mcpServers"][_SERVER]["env"]["TAXAX_LEGAL_DATA_DIR"], str(expected))
+                        self.assertTrue(expected.is_dir())
+            self.assertFalse(default_dir.exists())
+
     def test_credential_never_reaches_claude_config_or_stdout(self):
         secret = "test-oc-value-9137"
         with tempfile.TemporaryDirectory() as directory:

@@ -52,6 +52,8 @@ python -m taxax.legal install
 - `%APPDATA%\Claude\claude_desktop_config.json`을 **백업한 뒤** `taxax-legal` 항목만 병합합니다. 다른 MCP 서버 설정은 그대로 보존됩니다.
 - `doctor` 진단을 실행해 결과를 보여줍니다.
 
+별도 저장소를 쓰려면 설치 전에 `TAXAX_LEGAL_DATA_DIR`를 설정하거나 `taxax-legal --data-dir <경로> install --codex`처럼 명시하십시오. 선택한 경로가 MCP 등록과 `doctor`에 함께 사용됩니다.
+
 키를 나중에 넣으려면 `taxax-legal install --oc <키>`를 다시 실행하면 됩니다. 같은 명령을 여러 번 실행해도 안전합니다.
 
 > **법제처 API는 자료 종류별 목록·본문과 응답 형식별 이용 신청을 확인해야 합니다.** OC 키가 있어도 미승인 종류를 조회하면 "미신청된 목록/본문에 대한 접근입니다"라는 안내가 올 수 있습니다. [공동활용 신청 화면](https://open.law.go.kr/LSO/usrJoin.do)의 선택 체크만으로 실제 승인·조회 성공을 증명하지 않습니다. `ntsCgmExpc` 목록은 법제처 색인이며 국세청 해석 본문은 국세청 원본에서 확인합니다.

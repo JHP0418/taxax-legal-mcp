@@ -196,6 +196,7 @@ def run_install(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
     try:
         result = install_pip_application(
             config_path=arguments.config,
+            data_dir=arguments.data_dir,
             credential=credential,
             consent_to_configure_claude=not arguments.skip_claude,
             allow_config_update=arguments.force,

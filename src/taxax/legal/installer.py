@@ -421,6 +421,12 @@ def run_doctor(cli_executable: Path, data_dir: Path) -> dict[str, Any]:
     return result
 
 
+def _installation_data_dir(selected: Path | None = None) -> Path:
+    configured = os.environ.get("TAXAX_LEGAL_DATA_DIR", "").strip()
+    path = selected if selected is not None else Path(configured) if configured else default_legal_data_dir()
+    return path.expanduser().resolve()
+
+
 def install_local_application(
     source_dir: Path,
     *,
@@ -431,7 +437,7 @@ def install_local_application(
 ) -> InstallationResult:
     if not consent_to_configure_claude:
         raise InstallationError("Claude Desktop 설정 등록에는 사용자의 명시적 동의가 필요합니다.")
-    data_dir = default_legal_data_dir().resolve()
+    data_dir = _installation_data_dir()
     target_install_dir = default_install_root() / APPLICATION_VERSION
     target_config = (config_path or default_claude_desktop_config()).expanduser()
     if not target_config.is_absolute():
@@ -522,6 +528,7 @@ def _supplemental_provider_env(*, nts_consent: bool, olta_consent: bool) -> dict
 def install_pip_application(
     *,
     config_path: Path | None = None,
+    data_dir: Path | None = None,
     credential: str | None = None,
     consent_to_configure_claude: bool,
     allow_config_update: bool = False,
@@ -540,7 +547,7 @@ def install_pip_application(
     """
     if register_claude and not consent_to_configure_claude:
         raise InstallationError("Claude Desktop 설정 등록에는 사용자의 명시적 동의가 필요합니다.")
-    data_dir = default_legal_data_dir().resolve()
+    data_dir = _installation_data_dir(data_dir)
     mcp_executable = console_script("taxax-legal-mcp")
     cli_executable = console_script("taxax-legal")
 

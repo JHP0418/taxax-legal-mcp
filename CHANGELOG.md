@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.14 - 2026-10-02
+
+- `install`에서 명시한 `--data-dir` 또는 `TAXAX_LEGAL_DATA_DIR`를 Codex/Claude 등록과 진단에 그대로 사용합니다. 이전에는 기본 경로를 등록해 다른 저장소를 조회할 수 있었습니다.
+
 ## 0.2.13 - 2026-10-01
 
 - Windows PyInstaller 빌드가 namespace `taxax` 아래의 실행 진입점 때문에 내부 `taxax.mcp`를 외부 SDK `mcp`로 오인하지 않도록, 세 진입점을 임시 빌드 디렉터리로 복사해 분석합니다.
