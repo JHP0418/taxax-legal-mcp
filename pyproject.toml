@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "taxax-legal-mcp"
-version = "0.2.15"
+version = "0.2.16"
 description = "Korean tax-law source lookup and citation verification MCP server"
 readme = "README.md"
 license = "MIT"

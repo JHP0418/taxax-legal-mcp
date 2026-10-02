@@ -302,6 +302,26 @@ class PipInstallCommandTests(unittest.TestCase):
             self.assertFalse(payload["credential_configured"])
             self.assertTrue(any("재시작" in step for step in payload["next_steps"]))
 
+    def test_codex_install_explains_work_and_hook_boundaries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scripts, data_dir, _ = self._environment(root)
+            codex_config = root / "codex" / "config.toml"
+            a, b, c = self._patches(scripts, data_dir)
+            stream = io.StringIO()
+            with a, b, c, redirect_stdout(stream):
+                code = main(["install", "--no-oc", "--skip-claude", "--codex", "--codex-config", str(codex_config)])
+            self.assertEqual(code, 0)
+            payload = json.loads(stream.getvalue())
+            steps = "\n".join(payload["next_steps"])
+            self.assertIn("설정 > MCP 서버", steps)
+            self.assertIn("TAXax legal answer recheck", steps)
+            self.assertIn("Ponytail", steps)
+            self.assertIn("클라우드", steps)
+            self.assertIn("데이터 폴더", steps)
+            self.assertIn("Claude Cowork", steps)
+            self.assertNotIn("훅을 자동으로 신뢰", steps)
+
     def test_legacy_consent_arguments_do_not_generate_provider_env_flags(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

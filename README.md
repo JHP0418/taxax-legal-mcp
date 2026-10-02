@@ -71,10 +71,10 @@ taxax-legal install --codex
 ```
 
 `~/.codex/config.toml`(또는 `CODEX_HOME`)에 `[mcp_servers.taxax-legal]` 항목만 덧붙이며, 기존 주석·설정·다른 MCP 서버는 그대로 둡니다. 변경 전 원본은 같은 폴더에 백업합니다.
-법령 도구는 읽기 전용으로 표시되고, Codex에는 해당 서버에 한해 `default_tools_approval_mode = "writes"`가 설정됩니다. 읽기 요청에도 공식 기관 네트워크 조회(`upstream=true` 또는 상세 `refresh=true`)가 포함될 수 있으므로 기관 이용정책과 호출 비용을 확인하십시오. 데스크톱 앱을 재시작한 뒤 `/mcp`에서 `taxax-legal` 연결을 확인하고, 합성 문서로 원문 조회와 인용 검증을 먼저 시험하십시오.
+법령 도구는 읽기 전용으로 표시되고, Codex에는 해당 서버에 한해 `default_tools_approval_mode = "writes"`가 설정됩니다. 읽기 요청에도 공식 기관 네트워크 조회(`upstream=true` 또는 상세 `refresh=true`)가 포함될 수 있으므로 기관 이용정책과 호출 비용을 확인하십시오. 등록은 **설치 단계**일 뿐 클라이언트 노출·기관 접근·자동 훅 실행을 보증하지 않습니다. 아래 로컬 Work 점검을 별도로 수행하십시오.
 이전 버전에서 이미 `taxax-legal`을 Codex에 등록했다면, 기존 항목 변경을 명시적으로 허용하는 `taxax-legal install --codex --force`를 사용하십시오.
 
-**Codex 재검토 훅도 `--codex` 설치에 포함됩니다.** 기존 `hooks.json`의 다른 훅은 보존하고 원본을 백업한 뒤, TAXax `Stop` 훅을 추가합니다. Codex를 재시작하고 `/hooks`에서 **TAXax legal answer recheck**를 직접 검토·신뢰해야 실행됩니다. 훅은 법령·조문·판례 등 법적 내용이 있는 답변에 한해 **모델에게 답변 직전 원문·시점·공식 링크를 한 번 더 확인하라고 요청**합니다. 이미 한 번 이어진 턴(`stop_hook_active`)은 다시 막지 않으므로 무한 루프가 없습니다. 추가 모델 호출·기관 조회로 사용량과 지연이 늘 수 있습니다.
+**Codex 재검토 훅도 `--codex` 설치에 포함됩니다.** 기존 `hooks.json`의 다른 훅은 보존하고 원본을 백업한 뒤, TAXax `Stop` 훅을 추가합니다. 로컬 Codex에서 `/hooks` 또는 **설정 → Hook → 사용자 구성**을 열어 **TAXax legal answer recheck**라는 정확한 항목을 직접 검토·신뢰해야 실행됩니다. 화면의 **Ponytail** 등 다른 플러그인 훅에 뜬 `검토 필요`는 TAXax 훅 승인이 아닙니다. `사용자 구성: 훅 1개` 표시만으로 그 항목의 이름·신뢰 상태 또는 자동 실행을 알 수 없습니다. 훅은 법령·조문·판례 등 법적 내용이 있는 답변에 한해 **모델에게 답변 직전 원문·시점·공식 링크를 한 번 더 확인하라고 요청**합니다. 이미 한 번 이어진 턴(`stop_hook_active`)은 다시 막지 않으므로 무한 루프가 없습니다. 추가 모델 호출·기관 조회로 사용량과 지연이 늘 수 있습니다.
 
 설치할 때 만들어지는 Codex 설정 폴더의 `taxax-legal-hook.json`을 편집해 횟수와 켜짐 상태를 직접 바꿀 수 있습니다(재설치해도 기존 선택을 덮어쓰지 않습니다).
 
@@ -86,7 +86,24 @@ taxax-legal install --codex
 
 > ChatGPT **웹/모바일**은 로컬 stdio 서버에 연결하지 못하고 HTTPS 원격 서버만 지원합니다. 이 경로는 아래 "Hosted HTTP" 절을 참고하십시오.
 
-**Claude Cowork·호스팅된 ChatGPT Work는 로컬 설치와 별도입니다.** Claude Desktop의 `claude_desktop_config.json`이나 Codex의 `config.toml` 등록만으로 두 환경에 도구가 나타나지 않습니다. 조직 인증을 갖춘 외부 접근 가능 HTTPS `/mcp`를 배포한 뒤 [Cowork 원격 커넥터](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp)와 [ChatGPT Work 플러그인](https://learn.chatgpt.com/docs/extend/mcp)을 각각 등록·승인·검증해야 합니다. 현재 로컬 CLI/MCP와 격리 Codex 훅 검증을 Cowork/Work 실사용 검증으로 대체하지 않습니다.
+### ChatGPT 데스크톱 Work(로컬 실행) 적용
+
+1. 해당 프로젝트에서 쓰는 Codex 설정 홈(`~/.codex` 또는 실제 `CODEX_HOME`)에 `taxax-legal install --codex --skip-claude`로 등록합니다. `codex mcp get taxax-legal`과 `taxax-legal doctor`로 **설정과 비샌드박스 진단**을 확인합니다. 두 명령의 성공은 Work 대화에서의 MCP 연결 성공이 아닙니다.
+2. 데스크톱 앱을 완전히 종료·재시작하고 해당 프로젝트의 **새 로컬 Work/Codex 대화**를 엽니다. **설정 → MCP 서버**에서 `taxax-legal`이 활성인지 확인하고, 지원되는 대화에서 `/mcp`를 확인합니다. `/mcp`가 비어 있거나 메뉴가 없으면 그 대화의 도구가 연결됐다고 간주하지 마십시오. ChatGPT 웹/클라우드 Work는 로컬 설정을 읽지 않습니다.
+3. 새 대화에 “`taxax-legal`의 `get_source_status`만 1회 호출해 status와 문서 수를 알려줘”라고 요청하고 **실제 도구 호출**과 `status: ok`를 확인합니다. `doctor`는 공식 API를 호출하지 않습니다. 데이터 폴더가 비어 있으면 0건은 정상입니다. OC가 승인된 종류에만 제한된 공개 검색 1회를 따로 실행해 기관 연결을 점검하십시오.
+4. `sqlite3.OperationalError: unable to open database file`이면 Work의 쓰기 제한이 홈의 기본 데이터 폴더를 막았는지 확인합니다. 데이터 폴더를 **신뢰된 프로젝트 안의 비공개·버전관리 제외 경로**로 지정해 `taxax-legal --data-dir <절대경로> install --codex --skip-claude --force`로 다시 등록합니다. 예를 들어 프로젝트의 `.local/taxax-legal`을 쓸 때는 **먼저** `.git/info/exclude`에 `/.local/taxax-legal/`을 추가하고, `git status --short`로 데이터가 스테이징되지 않았음을 확인하십시오. 프로젝트의 `.codex/config.toml`에 `TAXAX_LEGAL_DATA_DIR` 재정의가 있으면 전역 설치 설정보다 우선하므로 두 경로가 일치하는지 확인하십시오. 설치기는 다른 프로젝트의 Git 제외 규칙이나 Work 보안정책을 자동 변경하지 않습니다. 기존 데이터/OC를 자동 복사하거나 설정 범위를 넓히지 않습니다. 새 경로는 빈 색인이므로 필요할 때만 `collect-seeds`로 채우고 기존 법령 캐시는 별도 백업·복원 절차를 사용합니다. `--force`는 기존 TAXax 항목 교체에만 사용합니다.
+5. **설정 → Hook → 사용자 구성**에서 정확히 `TAXax legal answer recheck` 훅을 검토·신뢰합니다. 로컬 대화의 법률 답변에서 실제 `Stop` 실행과 모델 재개 기록이 보일 때만 자동 실행됐다고 판정합니다. 훅 직접 실행이나 `get_source_status` 성공으로 대체하지 않습니다. [Codex 훅 문서](https://learn.chatgpt.com/docs/hooks)는 클라우드 오케스트레이션 Work에서 로컬 command 훅이 실행되지 않는다고 설명합니다.
+
+**웹 재확인 허용은 별개입니다.** **설정 → 컴퓨터 사용 → Google Chrome → 설치하기** 화면은 브라우저 확장 설치 상태이지 `law.go.kr`/`taxlaw.nts.go.kr`의 열람 허용이나 MCP 권한 설정이 아닙니다. Chrome 확장 없이 앱의 내장 브라우저를 쓸 수 있는 환경도 있습니다. 브라우저가 특정 URL 접근 허가를 요청할 때는 **정확한 공식 도메인·요청 범위만 확인해 사용자 본인이 승인**하십시오. 사이트별 승인은 TAXax MCP의 공식 API 권한·원문 품질·훅 신뢰와 무관하며, 운영체제/조직 정책의 차단을 설치기가 대신 해제할 수 없습니다. 전체 웹 접근이나 다른 훅까지 일괄 허용할 필요는 없습니다.
+
+### Claude Cowork와 클라우드 ChatGPT Work 적용
+
+**로컬 `pip install`·Claude Desktop 설정·Codex `config.toml`만으로는 두 클라우드 환경에 연결되지 않습니다.** 이 저장소는 인증된 공개 hosted 서버나 ChatGPT용 설치 플러그인을 제공하지 않으므로 지금 단계에서 두 클라우드 제품을 원클릭 설치했다고 안내하지 않습니다.
+
+1. 조직 운영자가 별도 호스트에 `taxax-legal-mcp --transport streamable-http`를 배포하고 공개 인터넷에서 접근할 수 있는 **HTTPS `/mcp`** 주소를 제공합니다. 법제처 OC는 그 서버에만 보관합니다. 조직 IdP의 JWT 발급·JWKS·필요 claim/scope와 TLS·Host/Origin 허용 목록을 먼저 구성해야 서버가 기동합니다. `localhost` 또는 개인 PC 파일 경로를 커넥터 URL로 넣지 마십시오. [Hosted HTTP 설정](#hosted-http)과 [운영 절차](docs/legal-mcp-deployment.md#중앙-hosted-http)를 참조하십시오.
+2. **Claude Cowork:** [Customize → Connectors](https://claude.ai/customize/connectors)에서 Pro/Max 사용자는 **Add custom connector**에 운영 HTTPS URL을 추가하고 인증 방법을 확인합니다. Team/Enterprise는 먼저 관리자가 **Organization settings → Connectors → Add → Custom → Web**에 서버를 등록하고, 구성원이 각각 **Connect**로 인증합니다. OAuth 또는 요청 헤더 인증을 쓰는 경우 서버의 JWT 계약과 호환되는지 운영자가 확인해야 합니다. 대화의 **+ → Connectors**에서 이 커넥터를 켜고 새 합성 질문으로 실제 호출을 확인합니다. 연결 실패 시 URL의 외부 접근성·TLS·인증·조직 승인 상태를 각각 점검합니다. [Anthropic 공식 안내](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp).
+3. **클라우드 ChatGPT Work:** 조직 관리자가 이 HTTPS MCP에 연결하는 **ChatGPT 호환 플러그인**을 별도 제작·게시·승인해야 합니다(현재 저장소에는 없음). Work의 **Plugins**에서 해당 플러그인을 설치하고 요청 시 인증을 연결한 뒤 **새 대화**에서 `get_source_status`의 실제 호출을 확인합니다. [ChatGPT 플러그인 안내](https://learn.chatgpt.com/docs/plugins). 앱의 로컬 Codex MCP 서버 목록이나 `/mcp`가 보이지 않는 것만으로 호스팅 플러그인 연결을 판정하지 마십시오.
+4. 이 클라우드 경로들에서는 **TAXax 로컬 Stop 훅을 자동 적용하지 않습니다.** 두 환경 모두 원문·시점·인용을 사람과 실제 도구 기록으로 재검토해야 하며, 연결 성공만으로 법률 답변 품질이 검증되지는 않습니다.
 
 > **업그레이드가 `WinError 32`로 실패한다면** MCP client가 서버를 띄워 둔 상태라 실행파일이 잠긴 것입니다.
 > `Access is denied` 또는 `다른 프로세스가 파일을 사용 중`이라는 메시지가 나오면 아래로 정리한 뒤 다시 설치하십시오.

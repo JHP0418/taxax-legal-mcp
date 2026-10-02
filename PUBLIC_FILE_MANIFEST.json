@@ -27,8 +27,8 @@
       "sha256": "036a62a746177081a43a4bd6a06a3afdf6a27b917b3c85eecc6978878fe613c4"
     },
     "CHANGELOG.md": {
-      "bytes": 8508,
-      "sha256": "a65ff480ba91e4c2672ffdc8b6d89b555b6cbbcbf903118f33d18a43e1701ede"
+      "bytes": 8867,
+      "sha256": "bbf57565183a30702e417a56e2e0cb6c26d20e81d0372f0a0982bb3f2ad997ca"
     },
     "Dockerfile": {
       "bytes": 1217,
@@ -47,8 +47,8 @@
       "sha256": "092cac6222afe78bb3f31435c2dd59a08541d29bdd913a91c278d1043e31d3fe"
     },
     "README.md": {
-      "bytes": 22153,
-      "sha256": "ca1108996c65ae659b8628517e7c3176d82eac541ad25ac3c0a9be856eda2f33"
+      "bytes": 28290,
+      "sha256": "fec641475c9c3bdfbff79567ed2aa65d848ca8fd2ff0d3309fb4fc017bd1b275"
     },
     "THIRD_PARTY_NOTICES.md": {
       "bytes": 1759,
@@ -72,7 +72,7 @@
     },
     "pyproject.toml": {
       "bytes": 1187,
-      "sha256": "6fd571efdc4b09b7822061baf8531130c56ab6d2c4863f9a91c9cb194680aaac"
+      "sha256": "b81f93594c1bcedef9412c9fccf288fee78fe4d6be772c345be3fd9857954b92"
     },
     "requirements.lock": {
       "bytes": 653,
@@ -119,8 +119,8 @@
       "sha256": "0cf9db9b6ad40026a8f0ea2f56b1242c606ba5fb8f564dd38790110b8243d442"
     },
     "src/taxax/legal/cli.py": {
-      "bytes": 21042,
-      "sha256": "87509a180349a2316d9151e0f7cf0d5ea317a37c16f1e4e7ecfdedffe4b4a414"
+      "bytes": 21920,
+      "sha256": "ef8316da1c76560f244a24c6bfdc487704297385aedb0ce86c431703559da60c"
     },
     "src/taxax/legal/codex_config.py": {
       "bytes": 8807,
@@ -315,8 +315,8 @@
       "sha256": "3f9c1897bc7e48e85acd53e15ebeff3fbeb503e4f66780535d795e4aff3f3e0f"
     },
     "tests/test_legal_pip_install.py": {
-      "bytes": 23408,
-      "sha256": "732e8e9cc4b51571bfa4d07e07bb15cd4d99be6a715f5a600d05816fe092934a"
+      "bytes": 24469,
+      "sha256": "9506057b0ac37bad8495ccb5fc0b1732be78a24fac704d0007a3a53d1582e4e7"
     },
     "tests/test_legal_providers.py": {
       "bytes": 31608,
