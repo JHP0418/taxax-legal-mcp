@@ -27,8 +27,8 @@
       "sha256": "036a62a746177081a43a4bd6a06a3afdf6a27b917b3c85eecc6978878fe613c4"
     },
     "CHANGELOG.md": {
-      "bytes": 8209,
-      "sha256": "a41d8b01df63050508e4522f5fd34b9b079bb304a50c34ab6ca6a2220da14d4c"
+      "bytes": 8508,
+      "sha256": "a65ff480ba91e4c2672ffdc8b6d89b555b6cbbcbf903118f33d18a43e1701ede"
     },
     "Dockerfile": {
       "bytes": 1217,
@@ -72,7 +72,7 @@
     },
     "pyproject.toml": {
       "bytes": 1187,
-      "sha256": "d49d75d1b090784af76d65a5fdd0aacbdf45b4e8215e0df9da3b8b73538b292d"
+      "sha256": "6fd571efdc4b09b7822061baf8531130c56ab6d2c4863f9a91c9cb194680aaac"
     },
     "requirements.lock": {
       "bytes": 653,
@@ -179,8 +179,8 @@
       "sha256": "953659ba4b346f08f37870a55c4d4918c75db65acff12ae5cb81762f9a2490a2"
     },
     "src/taxax/legal/providers/law_go.py": {
-      "bytes": 31829,
-      "sha256": "89e74a5751d04f979ebf63faf1f45567a5f2661e596707f92df9ad4b7f603894"
+      "bytes": 32210,
+      "sha256": "1cef4565e23507207e5683c393a0719ccf795f9363240ad5376b37526930fb28"
     },
     "src/taxax/legal/providers/nts.py": {
       "bytes": 21557,
@@ -319,16 +319,16 @@
       "sha256": "732e8e9cc4b51571bfa4d07e07bb15cd4d99be6a715f5a600d05816fe092934a"
     },
     "tests/test_legal_providers.py": {
-      "bytes": 31607,
-      "sha256": "a72cd7c45a93ca3944054f0aabc4707a7b37d476014fd4db63219318f409b864"
+      "bytes": 31608,
+      "sha256": "4ae7630403bfcbd55bfbb68382ac3d25e045920cb6bbbe7f8ad3e405459c4519"
     },
     "tests/test_legal_security.py": {
       "bytes": 8345,
       "sha256": "8fc175bbc71e01bad0f71bac060d8fd77479d937339a2dfdf84808d685dc7284"
     },
     "tests/test_legal_service.py": {
-      "bytes": 43239,
-      "sha256": "17ca4d35e5fca2a057d06a2f4d138cbbd5b677a7fe70cf3d05de1cfa6864ef97"
+      "bytes": 45438,
+      "sha256": "327efe69d6ac964e6f073470fec11b0c9bd96a3be89290ec451591429b5a0abb"
     },
     "tests/test_legal_snapshots.py": {
       "bytes": 18471,

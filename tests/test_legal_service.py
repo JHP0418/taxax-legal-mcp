@@ -141,6 +141,37 @@ class LegalServiceTests(unittest.TestCase):
             self.assertEqual(transport.calls[-1]["ID"], "000123")
             self.assertEqual(detailed.data["document_id"], document_id)
 
+    def test_search_and_detail_share_id_when_detail_omits_mst(self):
+        class MissingMstTransport(RoutedTransport):
+            def request(self, url, *, params=None, secrets=()):
+                response = super().request(url, params=params, secrets=secrets)
+                payload = json.loads(response.body)
+                if url.endswith("lawService.do"):
+                    payload["법령"]["기본정보"].pop("법령일련번호")
+                else:
+                    payload["LawSearch"]["law"][0]["id"] = "1"
+                return HttpResponse(url, 200, response.headers, json.dumps(payload, ensure_ascii=False).encode())
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            transport = MissingMstTransport()
+            service = LegalKnowledgeService(root, data_dir=root / "state", provider=LawGoProvider(credential="operator-secret", transport=transport))
+            listed = service.search_legal_sources(query="법인세법", target="law", upstream=True)
+            hit = listed.data["items"][0]
+            self.assertEqual(hit["document_id"], "law-go:law:000123")
+            self.assertEqual(hit["version_id"], "12345")
+            self.assertEqual(service.repository.get_document(hit["document_id"], version_id=hit["version_id"]).metadata["upstream_identifiers"]["ID"], ["000123"])
+            detail = service.get_legal_document(document_id=hit["document_id"], version_id=hit["version_id"], refresh=True)
+            self.assertEqual(transport.calls[-1]["MST"], "12345")
+            self.assertEqual(detail.data["document_id"], hit["document_id"])
+            self.assertEqual(detail.data["version_id"], hit["version_id"])
+            cached = service.get_legal_document(document_id=hit["document_id"], version_id=hit["version_id"])
+            self.assertEqual(cached.data["sections"], detail.data["sections"])
+            checked = service.verify_legal_citations(citations=[
+                {"document_id": hit["document_id"], "version_id": hit["version_id"], "locator": "조문내용", "quote": "법인세 과세"}
+            ])
+            self.assertEqual(checked.data["checks"][0]["status"], "verified")
+
     def test_missing_official_id_cannot_reuse_search_serial_as_id(self):
         class SerialOnlyTransport:
             def __init__(self):

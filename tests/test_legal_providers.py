@@ -98,7 +98,7 @@ class LawGoParserTests(unittest.TestCase):
             items, total, page = extract_items(payload, LegalTarget.LAW)
             self.assertEqual(total, 1)
             self.assertEqual(page, 1)
-            self.assertEqual(items[0]["source_document_id"], "12345")
+            self.assertEqual(items[0]["source_document_id"], "000123")
             self.assertEqual(items[0]["metadata"]["upstream_identifiers"]["ID"], ["000123"])
             self.assertEqual(items[0]["metadata"]["upstream_identifiers"]["MST"], ["12345"])
 

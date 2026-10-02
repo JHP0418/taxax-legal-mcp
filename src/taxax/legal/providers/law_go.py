@@ -413,6 +413,14 @@ def normalize_item(mapping: Mapping[str, Any], target: LegalTarget) -> dict[str,
         item[field] = value
     item["source_document_id"] = item["source_document_id"] or ""
     item["title"] = item["title"] or ""
+    identifiers = _identifier_values(mapping)
+    if target in {LegalTarget.LAW, LegalTarget.EFFECTIVE_LAW}:
+        official_id = _scalar(_lookup(mapping, ("법령ID", "ID")))
+        if official_id and re.fullmatch(r"\d{1,20}", official_id):
+            item["source_document_id"] = official_id
+            identifiers["ID"] = [official_id]
+        else:
+            identifiers.pop("ID", None)
     sections: list[dict[str, Any]] = []
     for kind, aliases in _SECTION_FIELDS:
         value = _lookup(mapping, aliases)
@@ -424,7 +432,7 @@ def normalize_item(mapping: Mapping[str, Any], target: LegalTarget) -> dict[str,
     item["sections"] = sections
     item["metadata"] = {
         **{str(key): value for key, value in mapping.items() if not isinstance(value, (dict, list))},
-        "upstream_identifiers": _identifier_values(mapping),
+        "upstream_identifiers": identifiers,
     }
     return item
 
