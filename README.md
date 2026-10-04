@@ -119,7 +119,7 @@ python -m taxax.legal install
 
 - 법제처 OC 인증키를 물어봅니다. 아직 없으면 [open.law.go.kr](https://open.law.go.kr)에서 무료로 발급받을 수 있고, 그냥 Enter로 건너뛰어도 됩니다(외부 법령 조회만 비활성).
 - 데이터 폴더(`%LOCALAPPDATA%\TAXax\legal`)를 만듭니다.
-- `%APPDATA%\Claude\claude_desktop_config.json`을 **백업한 뒤** `taxax-legal` 항목만 병합합니다. 다른 MCP 서버 설정은 그대로 보존됩니다.
+- Claude Desktop 설정 파일을 **백업한 뒤** `taxax-legal` 항목만 병합합니다. 다른 MCP 서버 설정은 그대로 보존됩니다. Windows의 Microsoft Store·MSIX 설치본은 `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\`의 설정을 읽으므로 그곳에 등록합니다(그 밖에는 `%APPDATA%\Claude\`).
 - `doctor` 진단을 실행해 결과를 보여줍니다.
 
 별도 저장소를 쓰려면 설치 전에 `TAXAX_LEGAL_DATA_DIR`를 설정하거나 `taxax-legal --data-dir <경로> install --codex`처럼 명시하십시오. 선택한 경로가 MCP 등록과 `doctor`에 함께 사용됩니다.
