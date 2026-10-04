@@ -46,7 +46,7 @@ jobs:
           python -m build --outdir "${RUNNER_TEMP}/taxax-legal-public-dist" "${RUNNER_TEMP}/taxax-legal-public"
           python "${RUNNER_TEMP}/taxax-legal-public/scripts/validate_legal_distribution.py" "${RUNNER_TEMP}/taxax-legal-public-dist"
         shell: bash
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.2.0
         if: runner.os == 'Linux' && matrix.python == '3.12'
       - name: Build and smoke Claude Desktop extension
         if: runner.os == 'Linux' && matrix.python == '3.12'
