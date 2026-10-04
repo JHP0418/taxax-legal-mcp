@@ -183,7 +183,12 @@ taxax-legal collect-seeds
 
 ### 업데이트
 
-같은 명령을 다시 실행하면 최신 버전을 받습니다.
+| 설치 방법 | 업데이트 |
+|---|---|
+| Claude Desktop 확장(.mcpb) | [최신 릴리스](https://github.com/JHP0418/taxax-legal-mcp/releases/latest)의 새 `.mcpb`를 설정 → 확장 프로그램에 다시 끌어 놓습니다. 키와 받아 둔 자료는 유지됩니다. |
+| Claude·Codex 플러그인 | 앱의 Plugins 화면에서 `taxax-legal`을 업데이트합니다. |
+| Codex 에이전트 설치 | 처음과 같은 문장을 다시 붙여넣습니다(절차가 "이미 있으면 업데이트"). |
+| 직접 설치(pip) | 아래 명령을 다시 실행합니다. |
 
 ```powershell
 pip install --upgrade https://github.com/JHP0418/taxax-legal-mcp/archive/refs/heads/main.zip
@@ -194,29 +199,34 @@ taxax-legal install --force
 
 ### 제거
 
-```powershell
-taxax-legal uninstall
-```
+| 설치 방법 | 제거 |
+|---|---|
+| Claude Desktop 확장 | 설정 → 확장 프로그램에서 TAXax를 제거합니다. |
+| Claude·Codex 플러그인 | Plugins 화면에서 `taxax-legal`을 제거합니다. |
+| Codex 에이전트 설치 | `"$(uv tool dir --bin)/taxax-legal" uninstall` 후 `uv tool uninstall taxax-legal-mcp` |
+| 직접 설치(pip) | `taxax-legal uninstall` |
 
-Claude Desktop·Claude Code·Codex 등록과 저장된 인증키를 지웁니다. 받아둔 법령 데이터 폴더는 남겨 둡니다.
+`uninstall`은 Claude Desktop·Claude Code·Codex 등록과 저장된 인증키를 지웁니다. 받아둔 법령 데이터 폴더는 남겨 둡니다.
 
 ## 요구사항
 
-- Python 3.11 이상
+- Python 3.11 이상 (Claude Desktop 확장·플러그인·에이전트 설치는 앱이나 `uv`가 맞는 Python을 준비하므로 직접 설치하지 않아도 됩니다)
 - 법제처 upstream 사용 시 **사용자가 [open.law.go.kr](https://open.law.go.kr)에서 직접 발급받은 OC 인증키**. `taxax-legal install`로 저장하거나 `TAXAX_LAW_GO_OC`로 지정합니다. 이 배포본은 공용 인증키를 대신 제공하지 않습니다(각자 발급 방식)
 - NTS/OLTA 공개 조회는 기본 활성화됩니다. 운영상 중지가 필요하면 `TAXAX_NTS_ENABLED=0` 또는 `TAXAX_OLTA_ENABLED=0`으로 명시적으로 opt-out합니다. 기존 `TERMS_CONFIRMED` 값은 deprecated no-op입니다.
 - K-AR와 `korean-law-mcp` bridge는 선택 기능이며 없어도 CLI, stdio MCP, 공개 법률 조회, research workflow가 기동
 
-## Windows 로컬 설치 마법사
+## Windows 로컬 설치 마법사 (소스에서 빌드)
 
-첫 공개 경로는 Windows 로컬 설치기입니다. 빌드된 bundle의 `SHA256SUMS.json`과 파일 hash를 먼저 대조한 뒤 `taxax-legal-setup-<version>-windows-<architecture>.exe`를 실행합니다. 최종 사용자는 별도 Python 설치가 필요하지 않습니다.
+일반 사용자는 위 [설치](#설치--쓰는-앱에-맞게-고르십시오)의 Claude Desktop 확장이나 에이전트 설치를 쓰십시오. 이 설치기는 소스에서 직접 빌드하는 경로이며 릴리스에는 첨부하지 않습니다. 빌드된 bundle의 `SHA256SUMS.json`과 파일 hash를 먼저 대조한 뒤 `taxax-legal-setup-<version>-windows-<architecture>.exe`를 실행합니다. 최종 사용자는 별도 Python 설치가 필요하지 않습니다.
 
 설치 마법사는 다음 순서로 동작합니다.
 
 1. 법제처 Open API OC를 입력하거나 건너뜁니다. 키가 없어도 local MCP와 offline demo는 기동되고 공식 upstream 조회만 비활성화됩니다.
 2. 실행파일을 `%LOCALAPPDATA%\TAXax\app\<version>`, 법률 data를 `%LOCALAPPDATA%\TAXax\legal`에 둡니다.
-3. 사용자 동의를 받은 경우에만 `%APPDATA%\Claude\claude_desktop_config.json`을 백업하고 기존 root field와 다른 MCP server를 보존한 채 `taxax-legal` 항목을 원자적으로 병합합니다. 같은 이름의 다른 항목은 별도 교체 동의 없이는 거부합니다.
+3. 사용자 동의를 받은 경우에만 Claude Desktop 설정 파일을 백업하고 기존 root field와 다른 MCP server를 보존한 채 `taxax-legal` 항목을 원자적으로 병합합니다. 같은 이름의 다른 항목은 별도 교체 동의 없이는 거부합니다.
 4. `doctor`를 실행하고 Claude Desktop을 완전히 종료한 뒤 다시 시작하도록 안내합니다.
+
+Claude Desktop 설정 파일은 Microsoft Store·MSIX 설치본이면 `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\claude_desktop_config.json`, 그 밖에는 `%APPDATA%\Claude\claude_desktop_config.json`입니다. MSIX 설치본은 `%APPDATA%` 쪽을 읽지 않으므로 설치기가 패키지 경로를 찾아 그곳에 등록합니다.
 
 OC는 Claude Desktop JSON이나 process argument에 넣지 않습니다. `%LOCALAPPDATA%\TAXax\config\provider-secrets.json`에 현재 Windows 사용자 SID만 `FullControl`인 상속 차단 ACL을 적용하고 실제 ACL 검증이 성공한 경우에만 평문으로 저장합니다. 이는 다른 일반 사용자 접근을 제한하지만 관리자 접근까지 막는 암호화 저장소는 아닙니다. 입력·교체·삭제는 명시적 사용자 동작으로만 수행합니다.
 
@@ -355,13 +365,26 @@ python scripts/export_legal_public.py /path/to/new-empty-destination
 
 포함·제외 경계는 [`PUBLIC_ALLOWLIST.md`](PUBLIC_ALLOWLIST.md)에 설명합니다.
 
+Claude Desktop 확장(.mcpb)은 공개 소스만 담아 만들고, Claude Desktop과 같은 방식으로 실행해 봅니다(`uv` 필요).
+
+```bash
+python scripts/build_legal_mcpb.py /path/to/output
+npx -y @anthropic-ai/mcpb validate /path/to/output/mcpb-staging/manifest.json
+python scripts/smoke_legal_mcpb.py /path/to/output/taxax-legal-mcp-<버전>.mcpb
+claude plugin validate ./plugins/taxax-legal
+```
+
+릴리스는 `pyproject.toml`의 버전과 같은 `v<버전>` 태그를 올리면 `legal-release` 워크플로가 위 검사를 거쳐 `.mcpb`·wheel·sdist를 붙여 만듭니다. 버전을 올릴 때는 `plugins/taxax-legal`의 `plugin.json` 2개, `mcp.json`, `hooks/codex-hooks.json`의 버전·태그도 같이 바꿉니다(`tests/test_legal_plugins.py`가 검사).
+
 ## 운영 검증 상태
 
-- L1 법제처 adapter: 합성 fixture 검증 완료
-- L2 NTS/OLTA adapter: 합성 fixture 검증 완료
-- AI 주도 조사 도구 계약: 합성 fixture와 오프라인 안전 probe 검증 완료. 실제 모델의 조사 선택·법적 답변 품질·3회 재생 및 구현 전 성능 기준선 대비 10% 판정은 미완료
-- JWT/JWKS와 server fail-closed: 합성 RSA token 및 설정 테스트 완료
-- 실제 공식 API 호출: 법제처는 사용자 발급 OC가 필요하며, NTS/OLTA는 공개 조회 경로와 provider 접근정책·호출 제한을 준수
-- 실제 IdP/reverse proxy/DNS/직원 client 연결: 운영 인프라가 없는 환경에서는 미실시
+2026-10-04 기준, 0.2.18에서 확인한 범위입니다.
+
+- **실제 공식 API**: 법제처·국세청·OLTA 실호출로 법령(약칭·조문·기준일 시행본), 판례(국세청 출처 판결문 포함), 조세심판·국세청 해석·지방세 결정례 원문 조회와 인용 검증을 확인했습니다.
+- **장애 대응**: 시간초과·연결 실패·5xx·429·403·로그인/점검 HTML·빈/깨진/과대 응답을 주입해 모두 원인 안내가 붙은 오류나 저장본 반환으로 끝나는지 확인했습니다. 도구 호출은 45초 안에 끝납니다.
+- **AI 사용**: Claude(CLI)와 Codex(CLI·플러그인)로 구체적·추상적 세무 질문을 실행해 도구 오류 없이 원문 확인·인용 검증까지 가는지 확인했습니다. 법률 답변의 품질 자체를 보증하지는 않습니다.
+- **배포물**: 릴리스 `.mcpb`를 Claude Desktop과 같은 방식(`uv run`)으로 실행, Codex 플러그인을 GitHub에서 설치·사용, Claude 플러그인 검증과 재검토 훅 동작, 빈 환경에서의 에이전트 설치 절차를 확인했습니다. CI는 Linux·Windows에서 테스트합니다.
+- **아직 확인하지 않음**: Windows 실기기의 Claude Desktop 확장 설치 화면, 확장 도구의 Cowork 연결, ChatGPT 데스크톱 앱의 Plugins 화면. 문제가 있으면 [이슈](https://github.com/JHP0418/taxax-legal-mcp/issues)로 알려 주십시오.
+- **원격(hosted) 운영**: 실제 IdP·reverse proxy·DNS 연결은 운영 인프라가 없어 시험하지 않았습니다.
 
 공식 자료의 수록 범위, 최신성, 재이용조건은 provider별 정책을 별도로 확인해야 합니다. 소프트웨어의 MIT license가 수집 원문의 재배포 권한을 의미하지 않습니다.
