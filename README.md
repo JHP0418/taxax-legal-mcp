@@ -16,12 +16,14 @@
 
 ### Claude Desktop (Windows·Mac)
 
-1. [최신 릴리스](https://github.com/JHP0418/taxax-legal-mcp/releases/latest)에서 `taxax-legal-mcp-<버전>.mcpb`를 내려받습니다.
-2. Claude Desktop **설정 → 확장 프로그램(Extensions)** 화면에 파일을 끌어 놓고 **설치**합니다.
+1. **[taxax-legal-mcp.mcpb 내려받기](https://github.com/JHP0418/taxax-legal-mcp/releases/latest/download/taxax-legal-mcp.mcpb)** — 누르면 설치 파일이 바로 '다운로드' 폴더에 받아집니다(약 190KB). 브라우저가 "자주 다운로드되지 않는 파일"이라고 하면 **유지**를 고릅니다.
+2. Claude Desktop **설정 → 확장 프로그램**에서 **고급 설정 → "확장 프로그램 설치"** 버튼을 누르고 받은 `taxax-legal-mcp.mcpb`를 고릅니다. 확장 프로그램 화면에 파일을 끌어 놓아도 됩니다. 빨간 "개발자 도구 경고"는 이 메뉴에 늘 뜨는 일반 안내입니다.
 3. **법제처 OC 인증키** 칸에 키를 넣습니다(없으면 비워 둠). 키는 운영체제 보안 저장소에 보관됩니다.
 4. 앱을 완전히 종료한 뒤 다시 열고, 새 대화에서 "TAXax get_source_status를 호출해 줘"로 연결을 확인합니다.
 
 Python을 따로 설치할 필요가 없습니다. 앱이 첫 실행 때 필요한 실행 환경을 자동으로 준비합니다(1~2분 걸릴 수 있음).
+
+> **저장소 링크나 바로가기를 Claude 대화창에 붙여넣거나 첨부해서는 설치되지 않습니다.** Claude 대화창과 Cowork는 앱 설정을 바꿀 수 없습니다. 위 파일을 받아 "확장 프로그램 설치"로 설치하거나, Claude 앱의 **Code** 탭에 아래 [에이전트 설치 절차](#에이전트-설치-절차) 문장을 붙여넣으십시오(Code 탭은 PC에서 명령을 실행할 수 있습니다). 확장 설치 버튼을 눌러도 아무 반응이 없으면 Code 탭 방법을 쓰십시오.
 
 ### Claude Cowork
 

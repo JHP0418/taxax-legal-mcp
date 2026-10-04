@@ -40,6 +40,8 @@ jobs:
           npx -y @anthropic-ai/mcpb validate build-mcpb/mcpb-staging/manifest.json
           python scripts/smoke_legal_mcpb.py "build-mcpb/taxax-legal-mcp-${VERSION}.mcpb"
           cp "build-mcpb/taxax-legal-mcp-${VERSION}.mcpb" dist/
+          # 버전 없는 이름도 올려 releases/latest/download/taxax-legal-mcp.mcpb가 늘 최신 파일을 받게 한다.
+          cp "build-mcpb/taxax-legal-mcp-${VERSION}.mcpb" dist/taxax-legal-mcp.mcpb
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}

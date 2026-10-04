@@ -31,8 +31,8 @@
       "sha256": "8ebe36717decd5a64f6cc34a6c9124ae5c4e377c38f3bcce8d9e6b7f2956c40e"
     },
     ".github/workflows/release.yml": {
-      "bytes": 2357,
-      "sha256": "f105ec9f86be9575ceabd651dfacb480a47c5a7dc2a2322ad7f10191918d3f6c"
+      "bytes": 2569,
+      "sha256": "69f5330b1b9d5e3eef08c5a8a3ffba296ded601311bced590675ee0400f84313"
     },
     ".gitignore": {
       "bytes": 617,
@@ -59,8 +59,8 @@
       "sha256": "71b862abf9a865d6212d5ec0f7e58eea25781a83d00a129926c607aefdf41065"
     },
     "README.md": {
-      "bytes": 36782,
-      "sha256": "300322b0324b020feb96792db9b99031bcf8b6fdd91179b0a9759e7352b27e02"
+      "bytes": 37717,
+      "sha256": "3059c6106e4207adb7200ef796251a42d9dff89bcdd35ff8bcc8031036fcf9d8"
     },
     "THIRD_PARTY_NOTICES.md": {
       "bytes": 1759,
