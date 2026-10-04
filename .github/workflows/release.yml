@@ -1,0 +1,54 @@
+name: legal-release
+
+# v* 태그를 올리면 Claude Desktop 확장(.mcpb)과 wheel·sdist를 만들어 GitHub 릴리스에 붙인다.
+# Claude·Codex 플러그인은 이 릴리스의 태그 주소(archive/refs/tags/v<버전>.zip)를 설치 원본으로 쓴다.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v10
+      - name: Tag must match the package version
+        run: |
+          version=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          test "v${version}" = "${GITHUB_REF_NAME}" || { echo "태그 ${GITHUB_REF_NAME} ≠ v${version}"; exit 1; }
+          echo "VERSION=${version}" >> "$GITHUB_ENV"
+      - name: Install
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+      - name: Test
+        run: python -m unittest discover -s tests -p "test_legal_*.py"
+      - name: Build wheel and sdist
+        run: |
+          python -m build --outdir dist
+          python scripts/validate_legal_distribution.py dist
+      - name: Build Claude Desktop extension
+        run: |
+          python scripts/build_legal_mcpb.py build-mcpb
+          npx -y @anthropic-ai/mcpb validate build-mcpb/mcpb-staging/manifest.json
+          python scripts/smoke_legal_mcpb.py "build-mcpb/taxax-legal-mcp-${VERSION}.mcpb"
+          cp "build-mcpb/taxax-legal-mcp-${VERSION}.mcpb" dist/
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY' > notes.md
+          import os, re
+          text = open("CHANGELOG.md", encoding="utf-8").read()
+          match = re.search(rf"^## {re.escape(os.environ['VERSION'])} .*?(?=^## |\Z)", text, re.S | re.M)
+          print(match.group(0) if match else "")
+          print("\n설치 방법은 README의 '설치'를 보십시오. Claude Desktop은 아래 .mcpb 파일을 설정 → 확장 프로그램에 끌어 놓습니다.")
+          PY
+          gh release create "${GITHUB_REF_NAME}" dist/*.mcpb dist/*.whl dist/*.tar.gz --title "TAXax legal MCP ${VERSION}" --notes-file notes.md

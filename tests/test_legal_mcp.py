@@ -98,3 +98,36 @@ class LegalMcpTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ToolDeadlineTests(unittest.TestCase):
+    def test_hanging_sources_end_within_the_tool_deadline_with_a_next_step(self):
+        """출처가 응답 없이 매달려도 도구 호출은 클라이언트 시간초과 전에 원인 안내와 함께 끝난다."""
+        import time
+
+        from taxax.legal.providers.law_go import LawGoProvider
+        from taxax.legal.providers.nts import NtsProvider
+        from taxax.legal.providers.olta import OltaProvider
+        from taxax.legal.service import LegalKnowledgeService
+        from taxax.legal.transport import HttpTransport, SessionHttpTransport
+        from taxax.mcp import legal_tools
+
+        class Hanging:
+            def open(self, request, timeout):
+                time.sleep(timeout)
+                raise TimeoutError("timed out")
+
+        with tempfile.TemporaryDirectory() as directory, patch.object(legal_tools, "TOOL_SECONDS", 3.0):
+            root = Path(directory)
+            service = LegalKnowledgeService(
+                root, data_dir=root / "data",
+                provider=LawGoProvider(credential="x", transport=HttpTransport(min_interval_seconds=0, opener=Hanging())),
+                nts_provider=NtsProvider(enabled=True, transport=SessionHttpTransport("taxlaw.nts.go.kr", min_interval_seconds=0, opener=Hanging())),
+                olta_provider=OltaProvider(enabled=True, transport=SessionHttpTransport("olta.re.kr", min_interval_seconds=0, opener=Hanging())),
+            )
+            started = time.monotonic()
+            response = legal_tools._bounded(lambda: service.search_legal_sources(query="대손금", provider="all", target="law", upstream=True))
+            elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 5.0)
+        self.assertIn(response.status.value, {"error", "partial"})
+        self.assertTrue(response.warnings)

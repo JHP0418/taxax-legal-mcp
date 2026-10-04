@@ -46,6 +46,15 @@ jobs:
           python -m build --outdir "${RUNNER_TEMP}/taxax-legal-public-dist" "${RUNNER_TEMP}/taxax-legal-public"
           python "${RUNNER_TEMP}/taxax-legal-public/scripts/validate_legal_distribution.py" "${RUNNER_TEMP}/taxax-legal-public-dist"
         shell: bash
+      - uses: astral-sh/setup-uv@v10
+        if: runner.os == 'Linux' && matrix.python == '3.12'
+      - name: Build and smoke Claude Desktop extension
+        if: runner.os == 'Linux' && matrix.python == '3.12'
+        run: |
+          python scripts/build_legal_mcpb.py "${RUNNER_TEMP}/taxax-mcpb"
+          npx -y @anthropic-ai/mcpb validate "${RUNNER_TEMP}/taxax-mcpb/mcpb-staging/manifest.json"
+          python scripts/smoke_legal_mcpb.py "${RUNNER_TEMP}"/taxax-mcpb/*.mcpb
+        shell: bash
       - name: Build container image
         if: runner.os == 'Linux' && matrix.python == '3.11'
         run: docker build -t taxax-legal-mcp:ci .

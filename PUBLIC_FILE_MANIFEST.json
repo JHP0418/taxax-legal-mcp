@@ -14,21 +14,33 @@
     "src/taxax/adapters/**"
   ],
   "files": {
+    ".agents/plugins/marketplace.json": {
+      "bytes": 275,
+      "sha256": "d2df4534c478a0dce8101a24adde1e5361fe25373dee9e99c8cba634ce9c632c"
+    },
+    ".claude-plugin/marketplace.json": {
+      "bytes": 479,
+      "sha256": "b29a0739da8485d90e27859406987eb7b4396f05d61d5687583fa1c51bd1a2cc"
+    },
     ".env.example": {
       "bytes": 1113,
       "sha256": "0c9b313b5c09409956ead32d497e239daace8ef2457df4d567b519666c215c4c"
     },
     ".github/workflows/ci.yml": {
-      "bytes": 3611,
-      "sha256": "681d568eeadf5edbb9b8715d734e6322c530e4967d9e86db255e6f19ef48b399"
+      "bytes": 4111,
+      "sha256": "b67628301bb1a99709aa12ff579ab198de1d7ef4eb96effeddf89b7b938336d2"
+    },
+    ".github/workflows/release.yml": {
+      "bytes": 2353,
+      "sha256": "b6321db150b896cf8aea6cfe7cee1d46179a749f2cb848bf0bbadce792e2f717"
     },
     ".gitignore": {
       "bytes": 617,
       "sha256": "036a62a746177081a43a4bd6a06a3afdf6a27b917b3c85eecc6978878fe613c4"
     },
     "CHANGELOG.md": {
-      "bytes": 10679,
-      "sha256": "d19bb33f8afb599e726fafc471fc2cad957b021283303919f6f44aff77de224c"
+      "bytes": 17330,
+      "sha256": "d5a49833e99e59960c72f08c496a684a2b32d77abff18a78df9d0812ef929f25"
     },
     "Dockerfile": {
       "bytes": 1217,
@@ -43,12 +55,12 @@
       "sha256": "420401c0d91fba73bba2d93b0ac829d035129e368f7ffbe2f05ff741bee70e1e"
     },
     "PUBLIC_ALLOWLIST.md": {
-      "bytes": 1649,
-      "sha256": "092cac6222afe78bb3f31435c2dd59a08541d29bdd913a91c278d1043e31d3fe"
+      "bytes": 2052,
+      "sha256": "71b862abf9a865d6212d5ec0f7e58eea25781a83d00a129926c607aefdf41065"
     },
     "README.md": {
-      "bytes": 31070,
-      "sha256": "c87264acd796012e05362fbe19f679bca2ab58792a77c1753f078c78ba7d64f1"
+      "bytes": 33540,
+      "sha256": "9fd535a87a65ef03600da517cf2993a40b6d617ab5052673474cdb0a82b67deb"
     },
     "THIRD_PARTY_NOTICES.md": {
       "bytes": 1759,
@@ -59,8 +71,8 @@
       "sha256": "81b3ad28854fe476a36fb42381af3ffb709a1ad9722521c0615796a74dfd90ff"
     },
     "docs/legal-mcp-deployment.md": {
-      "bytes": 10234,
-      "sha256": "8e7d2a88ff67a9e032c9aea03d332bccdf115b2ce98feeab7297a84089284ecc"
+      "bytes": 10347,
+      "sha256": "a5a253de8d0e4668315ab02644d9cfd6fca912e6d41f1974dc723dba1c2edc1a"
     },
     "examples/claude-code-stdio.json": {
       "bytes": 247,
@@ -70,25 +82,65 @@
       "bytes": 413,
       "sha256": "7a7acb652c308307ebc468598d207d4e9bd29755e203f2ce5d5a14df8433debd"
     },
+    "plugins/taxax-legal/.claude-plugin/plugin.json": {
+      "bytes": 650,
+      "sha256": "b9eb0d9905c3215269b032b2f60f6e5a94088c1bad9a7e454396949bcbb68006"
+    },
+    "plugins/taxax-legal/hooks/codex-hooks.json": {
+      "bytes": 430,
+      "sha256": "bcd614ebfb69f7d31982a8c6b47aff9ff70f932d85d546300f48194552a15218"
+    },
+    "plugins/taxax-legal/hooks/hooks.json": {
+      "bytes": 198,
+      "sha256": "b553e147ce300f3983983c8124aa592dbfd96204f758704aff7c751880c2d56c"
+    },
+    "plugins/taxax-legal/hooks/settings.json": {
+      "bytes": 37,
+      "sha256": "9d3d4e2b0de4fc1f3aaf0a27b65e05666654f4a318a84c708daa170634051b1d"
+    },
+    "plugins/taxax-legal/hooks/stop-recheck.sh": {
+      "bytes": 2459,
+      "sha256": "0440ed4f68c12456d0d872e9a51021d43160ae87fe6385f3535831ee20c83274"
+    },
+    "plugins/taxax-legal/mcp.json": {
+      "bytes": 334,
+      "sha256": "7f064a2966c008e001766322f07b66f1fbafc10d367726eeb8c99fa020cce2ab"
+    },
+    "plugins/taxax-legal/plugin.json": {
+      "bytes": 839,
+      "sha256": "a4369adcbc139cbd4127841dabcba4cbad291360659be3ae20e85000f666c981"
+    },
+    "plugins/taxax-legal/skills/taxax-legal-research/SKILL.md": {
+      "bytes": 2618,
+      "sha256": "dc3825691971a97ccab166936ac1dd3ac25962933248617260338195dfd3ca7e"
+    },
     "pyproject.toml": {
       "bytes": 1187,
-      "sha256": "3afcef528e1ac4e0e909098614cdccd9bcb3bfb4bfbef296e33e385ef322014a"
+      "sha256": "ca631a97352d283e0b4699792b4a08a31586e4e18d827d23d22e0ca5db1ce0bb"
     },
     "requirements.lock": {
       "bytes": 653,
       "sha256": "9038463b770e9a4188042960a8e21b8896d0e71065a65138f0e491d0246a403d"
+    },
+    "scripts/build_legal_mcpb.py": {
+      "bytes": 7050,
+      "sha256": "ce01974f99e8a2a79aa1d052fea510dd24d06c0870244a3a5551728f6bda0625"
     },
     "scripts/build_windows_installer.py": {
       "bytes": 5796,
       "sha256": "e2099f2148ce6e98ee0f5e7689420d441e920ef420e8d7d126563c890b5088f1"
     },
     "scripts/export_legal_public.py": {
-      "bytes": 5683,
-      "sha256": "e494eea9201339c338ff603a00804af9b9d266ac21204f093d9a3747539b0b8e"
+      "bytes": 5969,
+      "sha256": "95429091172745531a76be12f1e59033a6cc67aeaff604d4c2b7eac7f855ebe8"
     },
     "scripts/smoke_legal_install.py": {
       "bytes": 8377,
       "sha256": "4029e3e5e63cd9cb05e079cd6cb07ab22102731546d8213ed5998d3d28e99683"
+    },
+    "scripts/smoke_legal_mcpb.py": {
+      "bytes": 2896,
+      "sha256": "b45572cd566f924fbaadceb2bddff95761ce03556d4b45e9bfb976bc292414c4"
     },
     "scripts/smoke_windows_executables.py": {
       "bytes": 13955,
@@ -119,8 +171,8 @@
       "sha256": "8c9a15eebaeaf1ae877bc3e6242d419150b452ab7839de66dbff9777348cfb12"
     },
     "src/taxax/legal/cli.py": {
-      "bytes": 22150,
-      "sha256": "5859e9434b163d2bec0e7575c1ee6c9e96b98b63e0edda1a742508c78dfad409"
+      "bytes": 22205,
+      "sha256": "c251e66ad4efec36ac84bd44be18acea9bf47ef2c94fb7db958bd57cc9059fc7"
     },
     "src/taxax/legal/codex_config.py": {
       "bytes": 8807,
@@ -147,8 +199,8 @@
       "sha256": "06bfc06ee8d6ef69cc9f411b2a34bc4fb1e5979067287697e68a47875da1c307"
     },
     "src/taxax/legal/installer.py": {
-      "bytes": 28755,
-      "sha256": "3ce7eb5ebe8868e65aac665a3f87bd7466ba003db637bb802c6bdb5fb5c579c4"
+      "bytes": 29519,
+      "sha256": "7532b0d604841c375a850849867dc6d36a8061d1eca87a28c15e281992925992"
     },
     "src/taxax/legal/local_config.py": {
       "bytes": 24499,
@@ -179,8 +231,8 @@
       "sha256": "953659ba4b346f08f37870a55c4d4918c75db65acff12ae5cb81762f9a2490a2"
     },
     "src/taxax/legal/providers/law_go.py": {
-      "bytes": 33076,
-      "sha256": "2453fc56972a5142e2684131d26ebdf26ea6c3cf1917cc1d816a75c1b1a6a109"
+      "bytes": 36415,
+      "sha256": "ea9dafbceb24a635bcd6fb4998475df7fcb5576f5bfc4218f018618a603c1347"
     },
     "src/taxax/legal/providers/nts.py": {
       "bytes": 24997,
@@ -195,8 +247,8 @@
       "sha256": "70bd6aff6e05a657258b1c23d2ca6c7b4248828512fae8e8eaf6d6fbb7a72990"
     },
     "src/taxax/legal/repository.py": {
-      "bytes": 21992,
-      "sha256": "18fe7a051037e9f6681024d2d6c1d129376c88f98b428ae51e7693320b0023b4"
+      "bytes": 22816,
+      "sha256": "21c1d28336784c514a4f5e6a8cb968f101df73eaf6c220a739e3eadfc3e221f8"
     },
     "src/taxax/legal/router.py": {
       "bytes": 1472,
@@ -207,8 +259,8 @@
       "sha256": "fb0a04d98882491911d6a33d335dad380924fc717822cfd23245406aa77a4aff"
     },
     "src/taxax/legal/service.py": {
-      "bytes": 89168,
-      "sha256": "ae78365b692618ddcb4e49f07995a4b98e5f9d85f9e22e381e675bd81451662e"
+      "bytes": 109138,
+      "sha256": "cb58960b8a632c0a9a825c463bed4185d0755a023a6a892452b660fa966747cd"
     },
     "src/taxax/legal/snapshots.py": {
       "bytes": 6974,
@@ -219,8 +271,8 @@
       "sha256": "1b27eb6da8bd5c3856482b3d7ffbb50d36d24cd9505a2f806f5d4e7ff9d63239"
     },
     "src/taxax/legal/transport.py": {
-      "bytes": 42446,
-      "sha256": "4468bd1d04fbfa8e5e768bd7e9ab306e88da999514b513a567e7f64c3ad565f5"
+      "bytes": 43965,
+      "sha256": "abdb7cea9f354e59a1386e728660d33b08b188aad7c4d06f14b6ae816a3127f9"
     },
     "src/taxax/legal/version.py": {
       "bytes": 1835,
@@ -243,8 +295,8 @@
       "sha256": "aabcbcd5ff7d9c83dcb64e02aa22cc24a1cf4c95c275105ce3f635e56f170c20"
     },
     "src/taxax/mcp/legal_tools.py": {
-      "bytes": 5502,
-      "sha256": "6e563c860b74d26cc70190bef0d45b497f756fc82b042060082c7bd75aa505ee"
+      "bytes": 6865,
+      "sha256": "445701079596b6faf6aca2bb44420910e88c63fffe9a5842a2d772fb49d410b9"
     },
     "src/taxax/mcp/server.py": {
       "bytes": 6752,
@@ -311,32 +363,36 @@
       "sha256": "b4b739b485a8bfe1350158f46a8508910b0af8dffdedfc983cfdbd626df7da7d"
     },
     "tests/test_legal_mcp.py": {
-      "bytes": 5480,
-      "sha256": "3f9c1897bc7e48e85acd53e15ebeff3fbeb503e4f66780535d795e4aff3f3e0f"
+      "bytes": 7332,
+      "sha256": "7f8296e248f563edb0271d7208348ff9a112805b3b9d7915cb74be4596273467"
     },
     "tests/test_legal_pip_install.py": {
-      "bytes": 24469,
-      "sha256": "9506057b0ac37bad8495ccb5fc0b1732be78a24fac704d0007a3a53d1582e4e7"
+      "bytes": 25380,
+      "sha256": "95ac8b4585c265798be59e6394cdb8526afffe36c311793701454b094f832b2a"
+    },
+    "tests/test_legal_plugins.py": {
+      "bytes": 5364,
+      "sha256": "5edbd1ac293cf8047c941df4276c9c1e5a2d89b2b05a46b46e591386f050f8f7"
     },
     "tests/test_legal_providers.py": {
-      "bytes": 36105,
-      "sha256": "40c3ec082813b3b7487032b715d4f69373d4867b79e1a4e1c19a72973646e764"
+      "bytes": 39128,
+      "sha256": "b90a4bb83e8709fbef940eb0b07f74d7084534089890f2be014953fdad5d984d"
     },
     "tests/test_legal_security.py": {
       "bytes": 8345,
       "sha256": "8fc175bbc71e01bad0f71bac060d8fd77479d937339a2dfdf84808d685dc7284"
     },
     "tests/test_legal_service.py": {
-      "bytes": 51492,
-      "sha256": "5aa828f68056b6ee2c552ed68c0c7ea548bdd3fb5d6ca809dab1c4fb592c44d6"
+      "bytes": 65985,
+      "sha256": "30b664bca25618baa9ccb490ba013dd4876ba4dfd620d217ce9f4cd79be6513b"
     },
     "tests/test_legal_snapshots.py": {
       "bytes": 18471,
       "sha256": "7be0dc99a1ed5988ab337df516453ab3bee77989cc6ff05af515cbb26f36ce9b"
     },
     "tests/test_legal_supplemental_providers.py": {
-      "bytes": 44739,
-      "sha256": "f6e0277c929715cce16b23de2e2590c2987a1fbe6afc3fbc4e482a7e8624abcf"
+      "bytes": 46150,
+      "sha256": "259917cf3e279d6a140d1da252710bd3f6b78e22e192e355203903bfd4f1e841"
     },
     "tests/test_legal_version.py": {
       "bytes": 8953,

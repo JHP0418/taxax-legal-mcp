@@ -540,9 +540,12 @@ class HttpTransport:
         self,
         *,
         allowed_hosts: tuple[str, ...] = ("www.law.go.kr", "open.law.go.kr"),
-        timeout_seconds: float = 30.0,
+        timeout_seconds: float = 20.0,
         min_interval_seconds: float = 1.0,
-        max_attempts: int = 1,
+        # 시간초과·연결 실패·5xx만 1회 더 묻는다. 429·Retry-After·캠페인 회로는
+        # 아래에서 그대로 즉시 멈춘다. 한 번의 일시 장애로 조사가 끊기지 않게 하되
+        # 요청 증폭은 최대 2배로 묶는다.
+        max_attempts: int = 2,
         max_response_bytes: int = 16 * 1024 * 1024,
         sleeper: Callable[[float], None] = time.sleep,
         opener=None,
@@ -569,7 +572,9 @@ class HttpTransport:
         is_drf_endpoint = host == "www.law.go.kr" and parsed.path in {"/DRF/lawSearch.do", "/DRF/lawService.do"}
         existing = list(parse_qsl(parsed.query, keep_blank_values=True))
         encoded_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, urlencode(existing + [(key, str(value)) for key, value in (params or {}).items()]), parsed.fragment))
-        request = Request(encoded_url, headers={"Accept": "application/json, application/xml;q=0.9", "User-Agent": "TAXax-legal-source/1.0"}, method="GET")
+        # 법제처 DRF는 Referer가 없으면 유효한 OC에도 "사용자 정보 검증에 실패"를
+        # 돌려주는 사례가 보고됐다(chrisryugj/korean-law-mcp v4.0.9, PR #45).
+        request = Request(encoded_url, headers={"Accept": "application/json, application/xml;q=0.9", "User-Agent": "TAXax-legal-source/1.0", "Referer": "https://www.law.go.kr/"}, method="GET")
         context = _campaign_context()
         replay = _replay_response(
             context,
@@ -767,7 +772,7 @@ class HttpTransport:
 
     @staticmethod
     def _retry_delay(attempt: int) -> float:
-        return min(float(2 ** (attempt - 1)), 8.0)
+        return min(float(2 ** (attempt - 1)), 4.0)
 
     @staticmethod
     def _status_error(
@@ -843,6 +848,26 @@ class SessionHttpTransport:
             self.opener = self._new_opener()
 
     def request(
+        self,
+        url: str,
+        *,
+        method: str = "GET",
+        form: Mapping[str, str] | None = None,
+        headers: Mapping[str, str] | None = None,
+        max_bytes: int | None = None,
+    ) -> HttpResponse:
+        # 국세청·OLTA도 시간초과·연결 실패·5xx는 1회만 다시 묻는다(검색·상세 모두 읽기 전용).
+        # 캠페인 회로가 연 오류(retry_stopped)와 429·접근 차단은 그대로 올린다.
+        try:
+            return self._request_once(url, method=method, form=form, headers=headers, max_bytes=max_bytes)
+        except TransportError as exc:
+            transient = exc.details.get("stage") in {"timeout", "tcp", "network"} or (exc.status or 0) >= 500
+            if not transient or "retry_stopped" in exc.details or exc.code == ErrorCode.BUDGET_EXHAUSTED:
+                raise
+            self.sleeper(1.0)
+            return self._request_once(url, method=method, form=form, headers=headers, max_bytes=max_bytes)
+
+    def _request_once(
         self,
         url: str,
         *,

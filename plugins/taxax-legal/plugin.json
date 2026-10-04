@@ -1,0 +1,19 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "taxax-legal",
+  "version": "0.2.18",
+  "description": "법제처·국세청·지방세 공식 원문으로 세무 근거를 찾고, 답변의 인용 문구를 원문과 대조합니다.",
+  "author": { "name": "Park JH", "url": "https://github.com/JHP0418" },
+  "homepage": "https://github.com/JHP0418/taxax-legal-mcp",
+  "repository": "https://github.com/JHP0418/taxax-legal-mcp",
+  "license": "MIT",
+  "keywords": ["tax", "korea", "law", "세무", "법령", "판례", "국세청"],
+  "extensions": {
+    "com.openai": {
+      "displayName": "TAXax 세무 법률 근거",
+      "shortDescription": "세무 근거를 공식 원문으로 찾고 인용을 검증",
+      "category": "Productivity",
+      "hooks": "./hooks/codex-hooks.json"
+    }
+  }
+}

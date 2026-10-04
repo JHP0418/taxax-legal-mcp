@@ -1,0 +1,22 @@
+{
+  "name": "taxax-legal",
+  "displayName": "TAXax 세무 법률 근거",
+  "version": "0.2.18",
+  "description": "세무 질문에 TAXax 도구로 공식 원문을 확인하는 절차와, 법률 답변 끝에 근거를 한 번 재점검하는 훅. 도구 자체는 TAXax 확장(.mcpb)으로 설치합니다.",
+  "author": {
+    "name": "Park JH",
+    "url": "https://github.com/JHP0418"
+  },
+  "homepage": "https://github.com/JHP0418/taxax-legal-mcp",
+  "repository": "https://github.com/JHP0418/taxax-legal-mcp",
+  "license": "MIT",
+  "keywords": [
+    "tax",
+    "korea",
+    "law",
+    "세무",
+    "법령",
+    "판례",
+    "국세청"
+  ]
+}

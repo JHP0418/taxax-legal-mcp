@@ -4,30 +4,56 @@
 
 이 공개 package에는 TAXax 회계 engine, 고객 DB, `knowledge/`, 수집 원문, 사설 K-AR 자료가 포함되지 않습니다. GitHub 저장소는 source와 self-host 예제를 제공할 뿐 무료 hosted 운영 서버를 제공하지 않습니다.
 
-## 가장 쉬운 설치 — 에이전트에게 맡기기
+## 설치 — 쓰는 앱에 맞게 고르십시오
 
-ChatGPT 데스크톱(Codex·로컬 Work) 또는 Claude 데스크톱의 Code 탭처럼 **명령을 실행할 수 있는 에이전트**에게 아래 문장을 그대로 붙여넣으십시오.
+터미널이 필요 없습니다. 법제처 OC 인증키는 [open.law.go.kr](https://open.law.go.kr)에서 무료로 발급받습니다. 키가 없어도 국세청·지방세 출처는 쓸 수 있습니다.
+
+| 쓰는 앱 | 설치 | 사람이 할 일 |
+|---|---|---|
+| **Claude Desktop** (Windows·Mac) | 확장 파일(.mcpb) 하나 | 끌어 놓기 → 키 입력 → 재시작 |
+| **Claude Cowork** | 위 확장 + 플러그인(지침·재검토) | 저장소 주소 추가 → 설치 |
+| **ChatGPT 데스크톱** (Codex·로컬 Work) | 에이전트에게 링크 붙여넣기 | 키 알려주기 → 재시작 → 훅 신뢰 |
+
+### Claude Desktop (Windows·Mac)
+
+1. [최신 릴리스](https://github.com/JHP0418/taxax-legal-mcp/releases/latest)에서 `taxax-legal-mcp-<버전>.mcpb`를 내려받습니다.
+2. Claude Desktop **설정 → 확장 프로그램(Extensions)** 화면에 파일을 끌어 놓고 **설치**합니다.
+3. **법제처 OC 인증키** 칸에 키를 넣습니다(없으면 비워 둠). 키는 운영체제 보안 저장소에 보관됩니다.
+4. 앱을 완전히 종료한 뒤 다시 열고, 새 대화에서 "TAXax get_source_status를 호출해 줘"로 연결을 확인합니다.
+
+Python을 따로 설치할 필요가 없습니다. 앱이 첫 실행 때 필요한 실행 환경을 자동으로 준비합니다(1~2분 걸릴 수 있음).
+
+### Claude Cowork
+
+1. 위 **Claude Desktop 확장**을 먼저 설치합니다. Desktop에 설치한 로컬 도구는 Cowork 작업에 연결됩니다.
+2. 지침과 법률 답변 재검토 훅: **Customize → Plugins**에서 저장소 `JHP0418/taxax-legal-mcp`를 추가하고 **TAXax 세무 법률 근거**(`taxax-legal`)를 설치합니다. 세무 질문에 공식 원문을 확인하는 절차가 적용되고, 근거 없는 법률 답변은 끝나기 전에 한 번 재점검을 요청받습니다.
+
+### ChatGPT 데스크톱 (Codex·로컬 Work)
+
+Codex 대화창에 아래 문장을 그대로 붙여넣으십시오. 에이전트가 설치·등록·진단까지 진행합니다.
 
 ```text
 https://github.com/JHP0418/taxax-legal-mcp 의 README "에이전트 설치 절차"를 그대로 따라 TAXax 법률 MCP를 설치(이미 있으면 업데이트)해 줘.
 ```
 
-설치 중 에이전트가 **법제처 OC 인증키**를 물으면 알려주십시오(없으면 "없음"이라고 답하면 됩니다. [open.law.go.kr](https://open.law.go.kr)에서 무료로 발급). 설치가 끝나면 사람이 할 일은 두 가지뿐입니다: **앱 완전 종료 후 재시작**, Codex/Work에서 **설정 → Hook에서 `TAXax legal answer recheck` 신뢰**.
+에이전트가 **법제처 OC 인증키**를 물으면 알려주십시오(없으면 "없음"). 끝나면 **앱 완전 종료 후 재시작**, **설정 → Hook에서 `TAXax legal answer recheck` 신뢰** 두 가지만 하면 됩니다.
 
-> Claude **Cowork**와 ChatGPT **웹·클라우드 Work**는 내 PC에 설치한 MCP를 쓰지 못합니다. 이 설치는 ChatGPT 데스크톱의 Codex·로컬 Work, Claude 데스크톱 일반 대화, Claude Code에서 동작합니다.
+이미 `uv`를 쓰는 사용자는 **Plugins**에서 이 저장소를 마켓플레이스로 추가해 `taxax-legal` 플러그인을 설치해도 됩니다. 이 경우 키는 에이전트 절차 4단계처럼 따로 등록합니다.
+
+> ChatGPT **웹·클라우드 Work**와 claude.ai **웹**은 내 PC의 도구를 쓰지 못합니다. 아래 [Hosted HTTP](#hosted-http)처럼 인터넷에서 접근 가능한 서버가 따로 필요합니다.
 
 ### 에이전트 설치 절차
 
-에이전트는 아래 순서를 그대로 실행하고, 각 단계의 실제 출력으로 성공을 판정한다. 실패를 추측으로 넘기지 않는다.
+에이전트는 아래 순서를 그대로 실행하고, 각 단계의 실제 출력으로 성공을 판정한다. 실패를 추측으로 넘기지 않는다. Python을 직접 설치하지 않고 `uv`가 맞는 Python을 준비하게 한다(Windows의 Microsoft Store `python.exe` 바로가기·PATH 문제를 피한다).
 
-1. **Python 3.11 이상 확인.** `python --version`(Windows에서 `python`이 없으면 `py -3 --version`). 없거나 3.11 미만이면 Windows는 `winget install -e --id Python.Python.3.12 --scope user`, macOS는 `brew install python@3.12`로 설치한 뒤 새 셸에서 다시 확인한다. 이후 단계의 `python`은 확인된 실행 파일로 바꿔 쓴다.
-2. **설치·업데이트.** `python -m pip install --upgrade https://github.com/JHP0418/taxax-legal-mcp/archive/refs/heads/main.zip`
+1. **uv 확인.** `uv --version`. 없으면 Windows는 `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`, macOS·Linux는 `curl -LsSf https://astral.sh/uv/install.sh | sh`로 설치한다. 설치 직후 셸에서 `uv`가 안 보이면 `%USERPROFILE%\.local\bin\uv.exe`(Windows) 또는 `~/.local/bin/uv`를 직접 쓴다.
+2. **설치·업데이트.** `uv tool install --force --python 3.12 "taxax-legal-mcp @ https://github.com/JHP0418/taxax-legal-mcp/archive/refs/heads/main.zip"`
 3. **OC 키 확인.** 사용자에게 법제처 OC 인증키를 묻는다. 키를 대신 만들거나 추측하지 않는다.
-4. **등록.** 키가 있으면 `python -m taxax.legal install --codex --force --oc <키>`, 없으면 `python -m taxax.legal install --codex --force --no-oc`. Claude Desktop과 Codex(ChatGPT 데스크톱 앱 공용 설정)에 함께 등록되고 기존 설정은 백업 후 TAXax 항목만 바뀐다. Claude Code도 쓰면 `--claude-code`를 덧붙인다. 샌드박스가 홈 폴더 설정 쓰기를 막으면 사용자 승인을 요청한다.
-5. **진단.** `python -m taxax.legal doctor`의 결과를 그대로 보여준다.
+4. **등록.** 실행 파일은 `uv tool dir --bin`이 알려주는 폴더에 있다. Windows PowerShell은 `& "$(uv tool dir --bin)\taxax-legal.exe" install --codex --force --oc <키>`, macOS·Linux는 `"$(uv tool dir --bin)/taxax-legal" install --codex --force --oc <키>`. 키가 없으면 `--oc <키>` 대신 `--no-oc`. Codex(ChatGPT 데스크톱 공용 설정)와 Claude Desktop에 함께 등록되고, 기존 설정은 백업 후 TAXax 항목만 바뀐다. 샌드박스가 홈 폴더 설정 쓰기를 막으면 사용자 승인을 요청한다.
+5. **진단.** 같은 실행 파일로 `doctor`를 실행해 결과를 그대로 보여준다.
 6. **사용자에게 안내.** (a) 앱을 완전히 종료 후 재시작, (b) Codex/Work는 **설정 → Hook → 사용자 구성**에서 `TAXax legal answer recheck` 검토·신뢰, (c) 재시작 후 새 대화에서 "taxax-legal의 get_source_status를 1회 호출해 줘"로 실제 연결 확인. 이 세 가지는 에이전트가 대신 완료했다고 보고하지 않는다.
 
-## 설치 (Windows 기준, 5단계)
+## 직접 설치 (터미널, Windows 기준 5단계)
 
 터미널 입력은 2줄뿐입니다.
 
@@ -119,12 +145,12 @@ taxax-legal install --codex
 
 **웹 재확인 허용은 별개입니다.** **설정 → 컴퓨터 사용 → Google Chrome → 설치하기** 화면은 브라우저 확장 설치 상태이지 `law.go.kr`/`taxlaw.nts.go.kr`의 열람 허용이나 MCP 권한 설정이 아닙니다. Chrome 확장 없이 앱의 내장 브라우저를 쓸 수 있는 환경도 있습니다. 브라우저가 특정 URL 접근 허가를 요청할 때는 **정확한 공식 도메인·요청 범위만 확인해 사용자 본인이 승인**하십시오. 사이트별 승인은 TAXax MCP의 공식 API 권한·원문 품질·훅 신뢰와 무관하며, 운영체제/조직 정책의 차단을 설치기가 대신 해제할 수 없습니다. 전체 웹 접근이나 다른 훅까지 일괄 허용할 필요는 없습니다.
 
-### Claude Cowork와 클라우드 ChatGPT Work 적용
+### claude.ai 웹과 클라우드 ChatGPT Work 적용 (원격 서버 필요)
 
-**로컬 `pip install`·Claude Desktop 설정·Codex `config.toml`만으로는 두 클라우드 환경에 연결되지 않습니다.** 이 저장소는 인증된 공개 hosted 서버나 ChatGPT용 설치 플러그인을 제공하지 않으므로 지금 단계에서 두 클라우드 제품을 원클릭 설치했다고 안내하지 않습니다.
+**데스크톱 앱(Claude Desktop·Cowork, ChatGPT 데스크톱의 Codex·로컬 Work)은 위 [설치](#설치--쓰는-앱에-맞게-고르십시오)로 충분합니다.** 내 PC가 아닌 클라우드에서 도는 claude.ai 웹·클라우드 Work만 인터넷에서 접근 가능한 서버가 따로 필요하며, 이 저장소는 그런 공개 hosted 서버를 제공하지 않습니다.
 
 1. 조직 운영자가 별도 호스트에 `taxax-legal-mcp --transport streamable-http`를 배포하고 공개 인터넷에서 접근할 수 있는 **HTTPS `/mcp`** 주소를 제공합니다. 법제처 OC는 그 서버에만 보관합니다. 조직 IdP의 JWT 발급·JWKS·필요 claim/scope와 TLS·Host/Origin 허용 목록을 먼저 구성해야 서버가 기동합니다. `localhost` 또는 개인 PC 파일 경로를 커넥터 URL로 넣지 마십시오. [Hosted HTTP 설정](#hosted-http)과 [운영 절차](docs/legal-mcp-deployment.md#중앙-hosted-http)를 참조하십시오.
-2. **Claude Cowork:** [Customize → Connectors](https://claude.ai/customize/connectors)에서 Pro/Max 사용자는 **Add custom connector**에 운영 HTTPS URL을 추가하고 인증 방법을 확인합니다. Team/Enterprise는 먼저 관리자가 **Organization settings → Connectors → Add → Custom → Web**에 서버를 등록하고, 구성원이 각각 **Connect**로 인증합니다. OAuth 또는 요청 헤더 인증을 쓰는 경우 서버의 JWT 계약과 호환되는지 운영자가 확인해야 합니다. 대화의 **+ → Connectors**에서 이 커넥터를 켜고 새 합성 질문으로 실제 호출을 확인합니다. 연결 실패 시 URL의 외부 접근성·TLS·인증·조직 승인 상태를 각각 점검합니다. [Anthropic 공식 안내](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp).
+2. **claude.ai 웹(원격 커넥터):** [Customize → Connectors](https://claude.ai/customize/connectors)에서 Pro/Max 사용자는 **Add custom connector**에 운영 HTTPS URL을 추가하고 인증 방법을 확인합니다. Team/Enterprise는 먼저 관리자가 **Organization settings → Connectors → Add → Custom → Web**에 서버를 등록하고, 구성원이 각각 **Connect**로 인증합니다. OAuth 또는 요청 헤더 인증을 쓰는 경우 서버의 JWT 계약과 호환되는지 운영자가 확인해야 합니다. 대화의 **+ → Connectors**에서 이 커넥터를 켜고 새 합성 질문으로 실제 호출을 확인합니다. 연결 실패 시 URL의 외부 접근성·TLS·인증·조직 승인 상태를 각각 점검합니다. [Anthropic 공식 안내](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp).
 3. **클라우드 ChatGPT Work:** 조직 관리자가 이 HTTPS MCP에 연결하는 **ChatGPT 호환 플러그인**을 별도 제작·게시·승인해야 합니다(현재 저장소에는 없음). Work의 **Plugins**에서 해당 플러그인을 설치하고 요청 시 인증을 연결한 뒤 **새 대화**에서 `get_source_status`의 실제 호출을 확인합니다. [ChatGPT 플러그인 안내](https://learn.chatgpt.com/docs/plugins). 앱의 로컬 Codex MCP 서버 목록이나 `/mcp`가 보이지 않는 것만으로 호스팅 플러그인 연결을 판정하지 마십시오.
 4. 이 클라우드 경로들에서는 **TAXax 로컬 Stop 훅을 자동 적용하지 않습니다.** 두 환경 모두 원문·시점·인용을 사람과 실제 도구 기록으로 재검토해야 하며, 연결 성공만으로 법률 답변 품질이 검증되지는 않습니다.
 
@@ -264,7 +290,7 @@ taxax-legal search-legal-sources "법인세법 대손금" --provider law.go.kr -
 
 AI 클라이언트가 검색할 기관·검색어와 추가 원문 조회 여부를 선택합니다. `search_legal_sources`의 검색 요약은 원문이 아닙니다. 반환된 `next_cursor`로 같은 기관의 다음 검색 페이지를 조회하고, 검색 항목의 `document_id`로 `get_legal_document`를 호출하십시오. 상세 응답이 `partial`이고 본문이 없다면 `refresh=true`를 명시해 공식 상세를 조회하며, 절별 `next_cursor`가 있으면 필요한 다음 절도 조회합니다. 기준일 법령은 법령 ID가 아닌 해당 시행 버전의 MST와 기준일로 조회하고, 본문 확보 후 `verify_legal_citations`로 문구와 위치를 대조하십시오. **동일한 법령 ID 아래 시행본이 여러 개 있으면 `version_id`를 생략한 캐시 원문·인용 조회는 `TEMPORAL_UNRESOLVED` 또는 `unverified`로 멈춥니다.** 검색·상세 응답의 해당 MST를 `get_legal_document(document_id=…, version_id=…)`, `verify_legal_citations`의 각 인용 항목에 함께 전달하십시오. 과거 캐시에서 MST를 확인할 수 없으면 공식 MST로 새로 조회하십시오. `version_url`은 MST로 구성한 공식 웹 주소이며, 링크가 실제로 열리고 같은 시행본인지 별도 확인해야 합니다. 인증키가 없거나 출처가 응답하지 않으면 확인하지 못한 범위를 밝히고 법적 결론을 자동 확정하지 않습니다. 실제 고객자료는 별도 승인 없이 외부 AI 클라이언트로 보내지 마십시오.
 
-**기관 장애 시** 법제처 HTTP 요청은 기본 1회만 시도하고 `429`는 같은 작업 안에서 자동 재시도하지 않습니다. 국세청·OLTA도 본문·첨부·파싱 오류가 나면 작업 전체를 자동 반복하지 않습니다. 다른 MCP 도구 호출까지 차단하는 회로는 아니므로 `AUTH_FAILED`, `RATE_LIMITED`, `ACCESS_DENIED`, 시간초과 직후 같은 출처를 계속 호출하지 마십시오. 브라우저의 `open.law.go.kr` 가이드 페이지 시간초과는 MCP의 `www.law.go.kr/DRF/` 요청 실패나 IP 차단의 증거가 아닙니다. [이용 신청·장애 진단 절차](docs/legal-mcp-deployment.md#공식-출처-장애-진단)에 따라 승인 범위·출처·실패 단계를 구분하고 미확보 원문은 인용하지 마십시오.
+**기관 장애 시** 법제처·국세청·OLTA 요청은 시간초과·연결 실패·5xx에 한해 **1회만** 다시 시도하고, `429`·`Retry-After`·접근 차단은 재시도하지 않습니다. 그래도 실패하면 이미 받아 둔 원문·색인이 있으면 수집 시각과 함께 그것을 돌려주고(최신 여부 미확인 경고 포함), 없으면 오류와 함께 다음 행동을 안내합니다. 다른 MCP 도구 호출까지 차단하는 회로는 아니므로 `AUTH_FAILED`, `RATE_LIMITED`, `ACCESS_DENIED`, 시간초과 직후 같은 출처를 계속 호출하지 마십시오. 브라우저의 `open.law.go.kr` 가이드 페이지 시간초과는 MCP의 `www.law.go.kr/DRF/` 요청 실패나 IP 차단의 증거가 아닙니다. [이용 신청·장애 진단 절차](docs/legal-mcp-deployment.md#공식-출처-장애-진단)에 따라 승인 범위·출처·실패 단계를 구분하고 미확보 원문은 인용하지 마십시오.
 
 MCP 초기화 지침은 모델에게 답변 직전 각 법률 주장에 대응하는 **실제로 열리는 공식 원문 링크·시점·조문 또는 사건**을 재대조하고, 확인 불가한 주장은 제거하도록 요구합니다. 웹에서 발견한 링크도 해당 공식 페이지를 다시 확인해야 합니다. `verify_legal_citations`의 `verified`는 저장된 문서의 문구 일치만 뜻하며 링크 접근성·시행 버전·법적 적용을 보증하지 않습니다. **MCP 서버 자체는 클라이언트가 마지막에 작성하는 문장을 관찰하거나 모델의 두 번째 호출을 강제할 수 없습니다.** 위의 Codex `Stop` 훅은 설치·신뢰된 Codex 로컬 세션에서만 최대 1회 이어쓰기를 요청합니다. 모든 답변에 대한 기계적 강제가 필요하면 클라이언트의 최종 출력 승인 단계에서 별도로 검증하고 실패 시 출력을 차단해야 합니다.
 

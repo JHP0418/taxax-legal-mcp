@@ -50,7 +50,7 @@ TAXAX_MCP_ALLOWED_ORIGINS
 - [법제처 공동활용 신청·이용안내](https://open.law.go.kr/LSO/information/guide.do)에서 OC와 자료 종류별 **목록/본문·형식(XML/JSON)** 승인 상태를 먼저 확인합니다. 신청 화면의 선택 체크만으로 실제 승인·접근 성공을 증명하지 않습니다. 미신청 안내나 `AUTH_FAILED`를 IP 차단으로 단정하지 마십시오. TAXax의 국세청 해석 `ntsCgmExpc` 목록은 법제처 색인이며 해당 본문은 국세청 원본에서 확인합니다.
 - `open.law.go.kr/LSO/openApi/guideList.do` 브라우저 시간초과와 MCP가 호출하는 `www.law.go.kr/DRF/lawSearch.do`·`lawService.do` 실패는 서로 다른 요청입니다. 브라우저 화면 하나만으로 API 또는 IP 차단을 판정할 수 없습니다. 법제처 [API 신청 화면](https://open.law.go.kr/LSO/usrJoin.do)은 짧은 시간의 과도한 호출 제한을 안내합니다. 반복 시험 전에 [공지](https://open.law.go.kr/LSO/support/noticeList.do), 승인 내역 및 사이트의 오류자가진단·IP 접속이력을 확인하고 운영기관에 문의합니다.
 - 실패를 재현할 때는 비밀 OC·쿠키·고객자료를 제외한 provider, target, ID/MST, HTTP 상태, 실패 단계(timeout/DNS/TLS/HTTP/parse), 시도 횟수와 응답 안내 문구를 **한 요청 단위로** 기록합니다. `429`나 `Retry-After`, `401/403`, CAPTCHA/접근 차단, 시간초과 뒤 즉시 반복 호출하거나 다른 IP·인증값으로 우회하지 마십시오. 원문이 없으면 검증되지 않은 인용과 적용 결론을 보류합니다.
-- 기본 법제처 HTTP 호출은 한 번만 시도하고 `429`의 재시도를 금지합니다. 국세청(`taxlaw.nts.go.kr`)·OLTA(`olta.re.kr`)의 실패도 전체 작업을 자동 재생하지 않습니다. 이 정책은 **한 작업 내 요청 증폭만** 방지하며, 서로 다른 MCP 호출을 가로지르는 영구 차단이나 기관의 가동률 보장은 아닙니다. 기관이 정상화되었는지 확인한 뒤 승인된 범위에서 새 요청을 수행합니다.
+- 법제처·국세청(`taxlaw.nts.go.kr`)·OLTA(`olta.re.kr`) 호출은 시간초과·연결 실패·5xx에 한해 1회만 재시도하고 `429`·`Retry-After`·접근 차단은 재시도하지 않습니다. 캠페인 실행에서는 첫 실패에 출처 회로를 엽니다. 파싱 오류는 재시도하지 않습니다. 이 정책은 **한 작업 내 요청 증폭만** 방지하며, 서로 다른 MCP 호출을 가로지르는 영구 차단이나 기관의 가동률 보장은 아닙니다. 기관이 정상화되었는지 확인한 뒤 승인된 범위에서 새 요청을 수행합니다.
 - 법제처 [API 활용가이드](https://open.law.go.kr/LSO/openApi/guideList.do)의 별표·서식 예시에는 텍스트와 별개인 HWP/PDF 다운로드 링크가 있습니다. 별표 본문이나 파일명만 받았다면 실제 파일 내용을 확인한 것으로 취급하지 않습니다. 다운로드 경로가 열리지 않으면 그 범위를 미확보로 남기고 반복 다운로드로 서버 부하를 키우지 않습니다.
 
 ## Backup

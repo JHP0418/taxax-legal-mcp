@@ -42,7 +42,7 @@ CONTRACTS: dict[LegalTarget, TargetContract] = {
     LegalTarget.LAW_HISTORY: TargetContract(
         LegalTarget.LAW_HISTORY,
         "law_history",
-        True,
+        False,
         False,
         COMMON_LIST_FILTERS | {"date", "efYd", "ancYd", "ancNo", "rrClsCd", "org", "knd", "lsChapNo"},
         "efYd",
@@ -50,8 +50,11 @@ CONTRACTS: dict[LegalTarget, TargetContract] = {
     LegalTarget.EFFECTIVE_LAW: TargetContract(
         LegalTarget.EFFECTIVE_LAW,
         "effective_law",
-        False,
+        # 시행일별 버전 목록(MST·시행일자·공포일자). 2026-10-03 부가가치세법 실측: JSON 361건.
         True,
+        True,
+        COMMON_LIST_FILTERS | {"nw", "efYd", "ancYd", "ancNo", "org", "knd"},
+        "efYd",
         detail_identifiers=frozenset({"ID", "MST"}),
         notes=("MST 조회에는 efYd가 필수이며 ID 조회에서는 efYd가 무시됩니다.",),
     ),
@@ -392,7 +395,8 @@ def extract_items(payload: Any, target: LegalTarget) -> tuple[list[dict[str, Any
             candidates.append(normalize_item(mapping, target))
     unique: dict[tuple[str, str], dict[str, Any]] = {}
     for item in candidates:
-        key = (item["source_document_id"], item["title"])
+        # 시행일 목록은 같은 법령이 시행일·공포본마다 한 줄씩 온다. 합치면 버전이 사라진다.
+        key = (item["source_document_id"], item["title"]) + ((item.get("version_id"), item.get("effective_from")) if target == LegalTarget.EFFECTIVE_LAW else ())
         existing = unique.get(key)
         if existing is None or len(item.get("sections", [])) > len(existing.get("sections", [])):
             unique[key] = item
@@ -403,6 +407,38 @@ def extract_items(payload: Any, target: LegalTarget) -> tuple[list[dict[str, Any
             item = items[0]
             item["sections"] = articles + [section for section in item["sections"] if section["kind"] != "articles"]
     return items, total, page
+
+
+# 실무 약칭 → 법제처 정식 법령명. 법제처 검색은 약칭을 모른다.
+_TAX_LAW_ALIASES = {
+    "상증법": "상속세 및 증여세법", "상증세법": "상속세 및 증여세법",
+    "조특법": "조세특례제한법", "국기법": "국세기본법", "국징법": "국세징수법",
+    "부가세법": "부가가치세법", "부가법": "부가가치세법", "부가세": "부가가치세법",
+    "지특법": "지방세특례제한법", "지기법": "지방세기본법", "지징법": "지방세징수법",
+    "국조법": "국제조세조정에 관한 법률", "종부세법": "종합부동산세법", "종부세": "종합부동산세법",
+    "개소세법": "개별소비세법", "조처법": "조세범 처벌법",
+}
+_TAX_DECREE_ALIASES = {"령": "시행령", "칙": "시행규칙"}
+
+
+def expand_tax_law_alias(query: str) -> str:
+    """'상증법 시행령', '조특령', '부가세법 제16조' 같은 약칭을 정식 법령명으로 바꾼다. 모르면 그대로 둔다."""
+    head, _, rest = query.strip().partition(" ")
+    name = _TAX_LAW_ALIASES.get(head)
+    if name is None and head[-1:] in _TAX_DECREE_ALIASES:
+        base = _TAX_LAW_ALIASES.get(head[:-1] + "법")
+        if base:
+            name = f"{base} {_TAX_DECREE_ALIASES[head[-1]]}"
+    return f"{name} {rest}".strip() if name else query
+
+
+def jo_code(article: str) -> str | None:
+    """'제60조', '60조', '60', '제2조의3', 6자리 코드를 법제처 JO(조번호 4자리+가지번호 2자리)로 바꾼다."""
+    text = re.sub(r"\s+", "", article)
+    if re.fullmatch(r"\d{6}", text):
+        return text
+    parts = re.fullmatch(r"제?(\d{1,4})(?:조)?(?:의(\d{1,2}))?", text)
+    return f"{int(parts[1]):04d}{int(parts[2] or 0):02d}" if parts else None
 
 
 def normalize_item(mapping: Mapping[str, Any], target: LegalTarget) -> dict[str, Any]:
@@ -454,6 +490,9 @@ class LawGoProvider:
             self.credential_source = "explicit"
         else:
             environment_credential = os.environ.get("TAXAX_LAW_GO_OC", "").strip()
+            # 확장·플러그인 설정에서 키 칸을 비우면 치환되지 않은 "${user_config...}"가 그대로 올 수 있다.
+            if environment_credential.startswith("${"):
+                environment_credential = ""
             if environment_credential:
                 self.credential = environment_credential
                 self.credential_source = "environment"
@@ -480,31 +519,40 @@ class LawGoProvider:
 
     def search(self, target: LegalTarget, *, query: str | None = None, page: int = 1, display: int = 10, filters: Mapping[str, str] | None = None, response_type: str = "JSON") -> ProviderResult:
         contract = self._contract(target)
-        if not contract.search_supported:
-            raise ProviderError(ErrorCode.INVALID_REQUEST, f"{target.value}는 목록 검색 target이 아닙니다.")
         if target == LegalTarget.LAW_HISTORY:
             # 법제처 공식 가이드(lsHstListGuide)상 lsHistory는 출력 형태가 HTML로
-            # 고정돼 있어 JSON/XML을 요청해도 서버가 HTML 페이지를 그대로 돌려준다.
-            # 구조화된 근거 수집 대상이 아니므로 명확히 차단한다.
-            raise ProviderError(ErrorCode.INVALID_REQUEST, "법령연혁 목록(lsHistory)은 법제처 API가 HTML 형식만 제공해 구조화 조회를 지원하지 않습니다.")
+            # 고정돼 있어 구조화된 근거 수집 대상이 아니다. 목록에서도 뺐고,
+            # 잘못 불렀을 때는 쓸 수 있는 길을 알려준다.
+            raise ProviderError(ErrorCode.INVALID_REQUEST, "법령연혁 목록(lsHistory)은 법제처가 HTML로만 제공해 지원하지 않습니다. 특정 날짜에 시행된 버전은 get_applicable_law로 조회하십시오.")
+        if not contract.search_supported:
+            raise ProviderError(ErrorCode.INVALID_REQUEST, f"{target.value}는 목록 검색 target이 아닙니다.")
         self._require_credential()
-        if page < 1 or not 1 <= display <= 50:
-            raise ProviderError(ErrorCode.INVALID_REQUEST, "page는 1 이상, display는 1~50이어야 합니다.")
+        if page < 1 or not 1 <= display <= 100:
+            raise ProviderError(ErrorCode.INVALID_REQUEST, "page는 1 이상, display는 1~100이어야 합니다.")
         request_filters = dict(filters or {})
+        # 모르는 필터는 법제처에 보내지 않고 빼되, 뺐다는 사실은 경고로 남긴다.
         unsupported = sorted(set(request_filters) - contract.allowed_search_filters)
-        if unsupported:
-            raise ProviderError(ErrorCode.INVALID_REQUEST, "지원하지 않는 필터입니다.", details={"filters": unsupported})
+        for key in unsupported:
+            request_filters.pop(key)
         if target == LegalTarget.NTS_INTERPRETATION and request_filters.get("itmno") and query:
             raise ProviderError(ErrorCode.INVALID_REQUEST, "itmno 사용 시 upstream이 query를 무시하므로 둘을 함께 보낼 수 없습니다.")
         params: dict[str, str | int] = {"OC": self.credential or "", "target": target.value, "type": self._response_type(response_type), "display": display, "page": page}
-        if query:
-            params["query"] = query
+        expanded = expand_tax_law_alias(query) if query and target in {LegalTarget.LAW, LegalTarget.EFFECTIVE_LAW} else query
+        if expanded:
+            params["query"] = expanded
         params.update(request_filters)
         response = self.transport.request(SEARCH_ENDPOINT, params=params, secrets=(self.credential or "",))
         parsed = parse_response(response, response_type, secrets=(self.credential or "",))
         items, total, parsed_page = extract_items(parsed, target)
         public_params = {key: value for key, value in params.items() if key != "OC"}
         warnings = list(contract.notes)
+        if unsupported:
+            warnings.append(f"{target.value}에서 지원하지 않는 필터 {', '.join(unsupported)}는 적용하지 않았습니다.")
+        if expanded != query:
+            warnings.append(f"검색어 '{query}'를 정식 법령명 '{expanded}'로 바꿔 검색했습니다.")
+        words = (expanded or "").split()
+        if not items and len(words) >= 2:
+            warnings.append(f"법제처 검색은 띄어 쓴 단어를 모두 포함한 결과만 돌려줍니다. '{words[0]}'처럼 줄여 다시 검색하십시오. 0건은 자료가 없다는 증명이 아닙니다.")
         if total and not items:
             raise ProviderError(ErrorCode.INCOMPLETE_RESULT, "전체 건수는 있으나 결과 항목을 파싱하지 못했습니다.")
         return ProviderResult(target, public_params, response, parsed, items, total, parsed_page or page, display, tuple(warnings))
@@ -545,9 +593,10 @@ class LawGoProvider:
         elif effective_on:
             raise ProviderError(ErrorCode.INVALID_REQUEST, f"{target.value} 상세 조회에는 efYd를 사용할 수 없습니다.")
         if article:
-            if target not in {LegalTarget.LAW, LegalTarget.EFFECTIVE_LAW} or not re.fullmatch(r"\d{6}", article):
-                raise ProviderError(ErrorCode.INVALID_REQUEST, "JO는 law/eflaw의 6자리 조문 코드만 허용됩니다.")
-            params["JO"] = article
+            code = jo_code(article)
+            if target not in {LegalTarget.LAW, LegalTarget.EFFECTIVE_LAW} or code is None:
+                raise ProviderError(ErrorCode.INVALID_REQUEST, "조문은 law/eflaw에서 '제60조', '제2조의3' 또는 6자리 코드(006000)로 지정하십시오.")
+            params["JO"] = code
         response = self.transport.request(DETAIL_ENDPOINT, params=params, secrets=(self.credential or "",))
         parsed = parse_response(response, response_type, secrets=(self.credential or "",))
         items, _, _ = extract_items(parsed, target)
@@ -646,4 +695,4 @@ class LawGoProvider:
 
     def _require_credential(self) -> None:
         if not self.credential:
-            raise ProviderError(ErrorCode.AUTH_REQUIRED, "운영자가 관리하는 TAXAX_LAW_GO_OC가 필요합니다.")
+            raise ProviderError(ErrorCode.AUTH_REQUIRED, "법제처 OC 인증키가 등록되지 않아 법제처 조회를 할 수 없습니다.")

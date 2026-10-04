@@ -14,7 +14,10 @@
 - `Dockerfile`, `compose.yaml`
 - `docs/legal-mcp-deployment.md`
 - `examples/claude-code-stdio.json`, `examples/hosted-mcp.json`
-- `.github/workflows/ci.yml`
+- `.github/workflows/ci.yml`, `.github/workflows/release.yml`
+- `plugins/taxax-legal/**` (Claude·Codex 플러그인: 지침, 재검토 훅, MCP 정의)
+- `.claude-plugin/marketplace.json`, `.agents/plugins/marketplace.json`
+- `scripts/build_legal_mcpb.py`, `scripts/smoke_legal_mcpb.py` (Claude Desktop 확장 빌드·실행 시험)
 - `scripts/build_windows_installer.py`, `scripts/smoke_windows_executables.py`
 - `scripts/export_legal_public.py`, `scripts/smoke_legal_install.py`, `scripts/validate_legal_distribution.py`
 
@@ -30,4 +33,4 @@
 - 실제 TAXax `src/taxax/__init__.py`
 - 기존 대량 수집 script
 
-wheel은 `taxax.legal`, `taxax.legal.providers`, `taxax.mcp`만 명시 등록합니다. `taxax` parent는 implicit namespace로 동작하므로 직하 회계 module이나 기존 `__init__.py`가 wheel에 포함되지 않습니다. CI는 wheel/sdist member를 exact allowlist와 대조합니다.
+릴리스의 `.mcpb`는 위 공개 소스 중 `src/taxax/legal`·`src/taxax/mcp`만 담습니다. wheel은 `taxax.legal`, `taxax.legal.providers`, `taxax.mcp`만 명시 등록합니다. `taxax` parent는 implicit namespace로 동작하므로 직하 회계 module이나 기존 `__init__.py`가 wheel에 포함되지 않습니다. CI는 wheel/sdist member를 exact allowlist와 대조합니다.

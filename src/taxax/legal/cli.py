@@ -219,7 +219,7 @@ def run_install(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
         next_steps.append("로컬 Codex/ChatGPT Work를 재시작해 새 로컬 대화의 설정 > MCP 서버에서 taxax-legal을 확인하고 get_source_status를 호출하십시오. 등록만으로 기존 대화나 클라우드 Work에 도구가 나타나지는 않습니다.")
         next_steps.append("Work의 쓰기 제한 때문에 SQLite를 열 수 없으면 데이터 폴더를 허용된 비공개 경로로 선택해 --data-dir <경로> install --codex --force로 다시 등록하십시오. 법률 DB나 OC 키를 공개 저장소에 넣지 마십시오.")
         next_steps.append(f"로컬 Codex `/hooks`에서 **TAXax legal answer recheck** 항목만 직접 검토·신뢰하십시오(Ponytail 등 다른 훅과 혼동 금지). 기본 1회 재검토 설정은 {result.codex_hook_path.with_name('taxax-legal-hook.json')}에서 끄거나 0회로 설정할 수 있습니다. 자동 실행 여부는 실제 Stop 이벤트로 별도 확인하십시오.")
-        next_steps.append("Claude Cowork·클라우드 ChatGPT Work에는 이 로컬 설치가 연결되지 않습니다. 인증된 외부 HTTPS /mcp 서버와 각 서비스의 원격 커넥터/플러그인 등록·승인이 따로 필요합니다.")
+        next_steps.append("Claude Desktop·Claude Cowork는 릴리스의 TAXax 확장(.mcpb)을 설정 → 확장 프로그램에 설치해 쓰십시오. 클라우드 ChatGPT Work·claude.ai 웹은 이 로컬 설치에 연결되지 않으며 인증된 외부 HTTPS /mcp 서버가 따로 필요합니다.")
     elif not arguments.codex:
         next_steps.append("Codex에도 등록하려면 `--codex` 옵션을 함께 사용하십시오.")
     if result.claude_code_registered:

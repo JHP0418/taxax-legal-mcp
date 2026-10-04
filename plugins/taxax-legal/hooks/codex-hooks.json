@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uvx --from \"taxax-legal-mcp @ https://github.com/JHP0418/taxax-legal-mcp/archive/refs/tags/v0.2.18.zip\" taxax-legal stop-hook --settings \"${PLUGIN_ROOT}/hooks/settings.json\"",
+            "timeout": 30,
+            "statusMessage": "TAXax legal answer recheck"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -310,11 +310,18 @@ class LegalRepository:
                 editions = connection.execute(
                     "SELECT DISTINCT version_id, "
                     "COALESCE(json_extract(document_json, '$.effective_from'), '') AS effective_from, "
-                    "COALESCE(json_extract(document_json, '$.promulgated_on'), '') AS promulgated_on "
+                    "COALESCE(json_extract(document_json, '$.promulgated_on'), '') AS promulgated_on, "
+                    "COALESCE(json_extract(document_json, '$.metadata.공포번호'), '') AS promulgation_no "
                     "FROM legal_documents WHERE document_id=?",
                     (document_id,),
                 ).fetchall()
-                if len(editions) > 1:
+                # 검색(MST)과 조문 상세(법령키)는 같은 공포본에 다른 version_id와, 분리시행이면
+                # 서로 다른 시행일까지 붙인다(법인세법 제21217호: 검색 2026-07-01, 상세 2026-01-01).
+                # 공포일·공포번호가 같으면 같은 원문이므로 원문이 있는 쪽을 고르고,
+                # 다른 공포본이 섞였을 때만 버전 지정을 요구한다.
+                # 예전 파서가 저장한 검색 결과에는 공포번호가 비어 있어 공포일로만 묶는다.
+                distinct = {row["promulgated_on"] or row["effective_from"] or row["version_id"] for row in editions}
+                if len(distinct) > 1:
                     raise AmbiguousDocumentVersion(sorted({row["version_id"] for row in editions if row["version_id"]}))
             row = connection.execute(query, params).fetchone()
         return LegalDocument.model_validate_json(row["document_json"]) if row else None
@@ -353,8 +360,8 @@ class LegalRepository:
         # 제목 일치를 본문 일치보다 앞세우면 같은 결정성을 유지하면서 이 역전을
         # 없앨 수 있다. 본문 검색 자체를 없애지는 않는다. 제목에 없는 쟁점어로
         # 찾아야 하는 경우가 있다.
-        title_match = "(CASE WHEN title LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END)"
-        order_params = [f"%{escaped}%"]
+        title_match = "(CASE WHEN title = ? THEN 0 WHEN title LIKE ? ESCAPE '\\' THEN 1 ELSE 2 END)"
+        order_params = [query, f"%{escaped}%"]
         with self.connection() as connection:
             total = connection.execute(f"SELECT COUNT(*) AS count FROM legal_documents WHERE {where}", params).fetchone()["count"]
             rows = connection.execute(

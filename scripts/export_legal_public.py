@@ -10,9 +10,12 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
 _EXACT_FILES = (
+    ".agents/plugins/marketplace.json",
+    ".claude-plugin/marketplace.json",
     ".env.example",
     ".gitignore",
     ".github/workflows/ci.yml",
+    ".github/workflows/release.yml",
     "CHANGELOG.md",
     "Dockerfile",
     "LICENSE",
@@ -26,9 +29,11 @@ _EXACT_FILES = (
     "examples/hosted-mcp.json",
     "pyproject.toml",
     "requirements.lock",
+    "scripts/build_legal_mcpb.py",
     "scripts/build_windows_installer.py",
     "scripts/export_legal_public.py",
     "scripts/smoke_legal_install.py",
+    "scripts/smoke_legal_mcpb.py",
     "scripts/smoke_windows_executables.py",
     "scripts/validate_legal_distribution.py",
 )
@@ -46,6 +51,7 @@ def _sha256(path: Path) -> str:
 
 def _selected_files() -> list[Path]:
     files = [_ROOT / relative for relative in _EXACT_FILES]
+    files.extend(path for path in (_ROOT / "plugins" / "taxax-legal").rglob("*") if path.is_file())
     files.extend((_ROOT / "src" / "taxax" / "legal").rglob("*.py"))
     files.extend((_ROOT / "src" / "taxax" / "mcp").rglob("*.py"))
     files.extend(path for path in (_ROOT / "tests").glob("test_legal_*.py") if path.name != "test_legal_claude_e2e.py")

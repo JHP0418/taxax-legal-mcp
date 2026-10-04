@@ -5,6 +5,7 @@ import os
 import re
 import sqlite3
 import sys
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,11 +32,12 @@ from .models import (
 )
 from .providers.base import LegalTarget, ProviderError, ProviderResult, SupplementalResult
 from .providers.korean_law_bridge import KoreanLawBridge
-from .providers.law_go import CONTRACTS, PARSER_VERSION, LawGoProvider
+from .providers.law_go import CONTRACTS, PARSER_VERSION, LawGoProvider, expand_tax_law_alias, jo_code
 from .providers.nts import NtsProvider
 from .providers.olta import OltaProvider
 from .repository import AmbiguousDocumentVersion, LegalRepository
 from .seeds import FORM_SPECS, LAW_GROUPS, NTS_SPECS
+from .budget import remaining_seconds
 from .snapshots import SnapshotStore, sha256_bytes
 from .paths import default_legal_data_dir
 from .temporal import temporal_candidates
@@ -44,7 +46,8 @@ from .version import package_version
 
 MAX_QUERY_CHARS = 500
 DEFAULT_OUTPUT_CHARS = 16 * 1024
-MAX_OUTPUT_CHARS = 64 * 1024
+MAX_OUTPUT_CHARS = 20_000
+_SECTION_OVERHEAD_CHARS = 200
 _PII_PATTERNS = (
     re.compile(r"(?<!\d)\d{6}-[1-8]\d{6}(?!\d)"),
     re.compile(r"(?<!\d)\d{3}-\d{2}-\d{5}(?!\d)"),
@@ -59,7 +62,34 @@ _PROVIDER_ALIASES = {
     "nts": "taxlaw.nts.go.kr",
     "olta.re.kr": "olta.re.kr",
     "olta": "olta.re.kr",
+    "법제처": "law.go.kr", "국가법령정보센터": "law.go.kr",
+    "국세청": "taxlaw.nts.go.kr", "국세법령정보시스템": "taxlaw.nts.go.kr",
+    "지방세": "olta.re.kr", "지방세법령정보시스템": "olta.re.kr",
 }
+# 모델이 자연스럽게 쓰는 대상 이름을 법제처 target 값으로 바꾼다.
+_TARGET_ALIASES = {
+    **{target.value.lower(): target.value for target in LegalTarget},
+    "법령": "law", "법률": "law", "statute": "law",
+    "precedent": "prec", "precedents": "prec", "판례": "prec", "case": "prec",
+    "effective_law": "eflaw", "시행일법령": "eflaw",
+    "tax_tribunal": "ttSpecialDecc", "조세심판": "ttSpecialDecc", "심판례": "ttSpecialDecc", "조세심판원": "ttSpecialDecc",
+    "nts_interpretation": "ntsCgmExpc", "법령해석": "ntsCgmExpc", "국세청해석": "ntsCgmExpc",
+    "admin_rule": "admrul", "행정규칙": "admrul", "고시": "admrul", "훈령": "admrul",
+    "law_attachment": "licbyl", "별표": "licbyl", "서식": "licbyl",
+    "law_history": "lsHistory", "연혁": "lsHistory",
+}
+
+
+def _target_name(value: str | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        return _TARGET_ALIASES[value.strip().lower()]
+    except KeyError:
+        raise ProviderError(
+            ErrorCode.INVALID_REQUEST,
+            f"지원하지 않는 target '{value}'입니다. law(법령)·prec(판례)·ttSpecialDecc(조세심판)·ntsCgmExpc(국세청 해석 색인)·admrul(행정규칙)·licbyl(별표·서식)·eflaw(시행일 법령) 중 하나를 쓰십시오.",
+        ) from None
 _PROVIDER_HOSTS = {
     "law.go.kr": frozenset({"www.law.go.kr", "open.law.go.kr"}),
     "taxlaw.nts.go.kr": frozenset({"taxlaw.nts.go.kr"}),
@@ -111,6 +141,31 @@ def _cursor_offset(cursor: str | None) -> int:
     if offset > 2**63 - 1:
         raise ProviderError(ErrorCode.INVALID_REQUEST, "cursor가 지원 범위를 벗어났습니다.")
     return offset
+
+
+_TRANSIENT_CODES = frozenset({ErrorCode.UPSTREAM_UNAVAILABLE, ErrorCode.RATE_LIMITED, ErrorCode.BUDGET_EXHAUSTED})
+_NOT_ABSENCE = "이 오류는 자료가 없다는 증명이 아닙니다. 내용을 추측하지 말고 미확보로 표시하십시오."
+
+
+def _next_step(code: ErrorCode, message: str) -> str:
+    """오류마다 모델이 바로 할 수 있는 다음 행동을 한 줄로 알려준다."""
+    if code == ErrorCode.AUTH_FAILED and "미신청" in message:
+        return ("이 법제처 OC 키에 해당 자료 종류의 목록·본문 이용이 승인되지 않았습니다. 재시도로 해결되지 않습니다. "
+                "사용자에게 open.law.go.kr → OPEN API → OPEN API 신청에서 해당 자료를 추가 신청하라고 안내하고, 국세청(taxlaw.nts.go.kr) 등 다른 출처를 쓰십시오.")
+    if code == ErrorCode.AUTH_REQUIRED:
+        return ("법제처 OC 키가 아직 없습니다. 사용자에게 open.law.go.kr에서 무료로 발급받아 `python -m taxax.legal install --oc <키> --force`로 등록하라고 안내하십시오. "
+                "그동안 국세청(provider=nts)·지방세(provider=olta) 출처는 키 없이 쓸 수 있습니다.")
+    if code == ErrorCode.AUTH_FAILED:
+        return "법제처가 OC 키를 거절했습니다. 사용자에게 키가 맞는지 open.law.go.kr에서 확인하고 `python -m taxax.legal install --oc <키> --force`로 다시 등록하라고 안내하고, 그동안 국세청·지방세 출처를 쓰십시오."
+    if code == ErrorCode.RATE_LIMITED:
+        return "기관이 호출 한도를 알렸습니다. 같은 출처를 이번 대화에서 다시 부르지 말고 저장된 자료(upstream=false)나 다른 출처를 쓰십시오. " + _NOT_ABSENCE
+    if code in {ErrorCode.UPSTREAM_UNAVAILABLE, ErrorCode.BUDGET_EXHAUSTED}:
+        return "공식 출처가 일시적으로 응답하지 않았습니다(자동 재시도 포함). 같은 요청을 바로 반복하지 말고 저장된 자료(upstream=false)나 다른 출처를 쓰십시오. " + _NOT_ABSENCE
+    if code in {ErrorCode.NOT_FOUND, ErrorCode.INCOMPLETE_RESULT, ErrorCode.PARSE_ERROR}:
+        return "검색 결과의 document_id나 식별자를 다시 확인하십시오. " + _NOT_ABSENCE
+    if code in {ErrorCode.INVALID_REQUEST, ErrorCode.TEMPORAL_UNRESOLVED}:
+        return "오류 메시지가 안내하는 형식으로 인자를 고쳐 한 번 다시 호출하십시오."
+    return _NOT_ABSENCE
 
 
 def _provider_name(value: str | None, default: str) -> str:
@@ -281,6 +336,7 @@ class LegalKnowledgeService:
         rid = request_id()
         selected_provider = self.provider.name
         try:
+            target = _target_name(target)
             value = _validate_query(query)
             if not 1 <= limit <= 50 or page < 1:
                 raise ProviderError(ErrorCode.INVALID_REQUEST, "page는 1 이상, limit는 1~50이어야 합니다.")
@@ -306,6 +362,10 @@ class LegalKnowledgeService:
                     run_id=run_id,
                 )
                 documents = result["documents"]
+                if result["status"] == ResponseStatus.ERROR and all(ErrorCode(item["code"]) in _TRANSIENT_CODES for item in result["provider_errors"]):
+                    fallback = self._stored_search_fallback(rid, value, selected_provider, document_type, normalized_jurisdiction, limit, ErrorCode.UPSTREAM_UNAVAILABLE)
+                    if fallback is not None:
+                        return fallback
                 unfiltered_count = len(documents)
                 if document_type:
                     documents = [document for document in documents if document.document_type == document_type]
@@ -349,7 +409,19 @@ class LegalKnowledgeService:
                 limit=limit,
                 offset=offset,
             )
+            wanted = expand_tax_law_alias(value)
+            if local_provider and offset == 0 and not any(wanted in document.title or value in document.title for document in documents):
+                # 출처를 지정했는데 저장소에 제목이 맞는 문서가 없으면 본문 언급만 맞은 다른 법령을
+                # 돌려주게 된다(E2E Q15: "소득세법" → 법인세법). 그 출처를 실제로 검색한다.
+                live = self.search_legal_sources(
+                    query=query, target=target, provider=provider, document_type=document_type, jurisdiction=jurisdiction,
+                    filters=filters, page=page, limit=limit, upstream=True, response_type=response_type, run_id=run_id,
+                )
+                if live.status != ResponseStatus.ERROR or not documents:
+                    live.warnings.insert(0, "저장소에 제목이 맞는 문서가 없어 공식 출처를 검색했습니다.")
+                    return live
             next_cursor = str(offset + limit) if offset + limit < total else None
+            title_hit = any(value in document.title for document in documents)
             return LegalToolResponse(
                 request_id=rid,
                 status=ResponseStatus.OK,
@@ -358,10 +430,34 @@ class LegalKnowledgeService:
                 pagination=Pagination(page=(offset // limit) + 1, page_size=limit, total=total, next_cursor=next_cursor),
                 coverage=Coverage(queried_providers=["local-legal-index"], succeeded_providers=["local-legal-index"], fetched=len(documents), next_cursor=next_cursor),
                 freshness={"upstream": False},
-                warnings=self._empty_index_warnings(total) + self._unapplied_filter_warnings(filters),
+                warnings=self._empty_index_warnings(total) + self._unapplied_filter_warnings(filters) + (
+                    [] if title_hit or not documents else [f"'{value}'이 제목에 들어간 문서는 저장소에 없습니다. 본문에 언급된 문서만 찾았습니다. 공식 출처는 provider를 지정하거나 upstream=true로 검색하십시오."]
+                ),
             )
         except (ProviderError, TransportError, ValueError, OSError) as exc:
+            code = getattr(exc, "code", None)
+            if upstream and code in _TRANSIENT_CODES:
+                fallback = self._stored_search_fallback(rid, value, selected_provider, document_type, normalized_jurisdiction, limit, code)
+                if fallback is not None:
+                    return fallback
             return self._error_response(rid, exc, provider=selected_provider if upstream else "local-legal-index")
+
+    def _stored_search_fallback(self, rid, query, selected_provider, document_type, jurisdiction, limit, code) -> LegalToolResponse | None:
+        """기관이 일시적으로 응답하지 않을 때 이미 받아 둔 색인에서 찾는다. 없으면 None(원래 오류)."""
+        provider = None if selected_provider == "all" else selected_provider
+        documents, total = self.repository.search_documents(query, provider=provider, document_type=document_type, jurisdiction=jurisdiction, limit=limit, offset=0)
+        if not documents:
+            return None
+        return LegalToolResponse(
+            request_id=rid,
+            status=ResponseStatus.PARTIAL,
+            data={"items": [self._metadata_view(document) for document in documents], "candidate_groups": self._candidate_groups(documents)},
+            sources=[_source(document) for document in documents],
+            pagination=Pagination(page=1, page_size=limit, total=total, next_cursor=None),
+            coverage=Coverage(queried_providers=[selected_provider, "local-legal-index"], succeeded_providers=["local-legal-index"], failed_providers=[selected_provider], fetched=len(documents)),
+            freshness={"upstream": False},
+            warnings=[f"공식 출처가 일시적으로 응답하지 않아({code.value}) 이전에 받아 둔 색인 결과를 반환했습니다. 최신 여부는 확인되지 않았습니다."],
+        )
 
     def get_legal_document(
         self,
@@ -385,18 +481,36 @@ class LegalKnowledgeService:
         rid = request_id()
         selected_provider = self.provider.name
         try:
+            target = _target_name(target)
             section_index, character_offset = self._section_cursor(section_cursor)
-            if not 1 <= max_chars <= MAX_OUTPUT_CHARS:
+            if max_chars < 1:
                 raise ProviderError(ErrorCode.INVALID_REQUEST, f"max_chars는 1~{MAX_OUTPUT_CHARS}여야 합니다.")
-            document = self._selected_document(document_id, version_id) if document_id else None
+            warnings: list[str] = []
+            if max_chars > MAX_OUTPUT_CHARS:
+                # 클라이언트(Claude Code 등)는 도구 응답을 약 25,000토큰에서 자른다. 오류 대신 줄이고 이어 읽는 법을 알린다.
+                warnings.append(f"한 번에 {MAX_OUTPUT_CHARS:,}자까지 돌려줍니다. 나머지는 pagination.next_cursor를 section_cursor로 넘겨 이어 읽으십시오.")
+                max_chars = MAX_OUTPUT_CHARS
+            auto_refresh = False
+            document = self._selected_document(document_id, version_id, warnings) if document_id else None
             if version_id and document is None:
                 raise ProviderError(ErrorCode.NOT_FOUND, "요청한 version_id의 저장 문서가 없습니다. 다른 시행본으로 대체하지 않았습니다.")
-            warnings: list[str] = []
             # article·attachment·response_type·effective_on·identifier_kind는 upstream
             # 조회에만 쓰인다. 캐시에 문서가 있으면 아래 블록을 통째로 건너뛰므로
             # 이 값들은 아무 효과가 없는데, 예전에는 그 사실을 알리지 않아 지정한
             # 쪽에서는 적용된 결과를 보고 있다고 오해했다. 받아놓고 조용히 무시하는
             # 것이 가장 나쁘다. 무엇이 반영되지 않았고 어떻게 하면 반영되는지 적는다.
+            if document is not None and not refresh and (
+                document.content_completeness == ContentCompleteness.METADATA_ONLY or document.metadata.get("preview_only") in (True, "true")
+            ):
+                # 검색 결과로만 저장된 문서를 연다는 것은 본문을 원한다는 뜻이다. 한 번 더 부르게 하지 않는다.
+                refresh = auto_refresh = True
+            if document is not None and not refresh and document.provider == self.provider.name:
+                # 기준일이나 저장본에 없는 조문을 지정했다면 원하는 것은 새 원문이다.
+                # 같은 날 같은 요청은 완료된 수집을 재사용하므로 호출이 늘지 않는다.
+                code = jo_code(article) if article else None
+                wanted = f"제{int(code[:4])}조" + (f"의{int(code[4:])}" if int(code[4:]) else "") if code else None
+                if effective_on or (wanted and not any(section.locator == wanted for section in document.sections)):
+                    refresh = True
             fetch_only = {
                 "article": article,
                 "attachment": attachment or None,
@@ -410,68 +524,95 @@ class LegalKnowledgeService:
                     "저장된 문서를 그대로 돌려주었으므로 이 값들은 반영되지 않았습니다. "
                     "적용하려면 refresh=true로 다시 요청하십시오."
                 )
-            if refresh or document is None:
-                selected_provider = _provider_name(provider, document.provider if document else self.provider.name)
-                if selected_provider == "all":
-                    raise ProviderError(ErrorCode.INVALID_REQUEST, "상세 조회는 provider 하나를 지정해야 합니다.")
-                source_id = source_document_id or (document.source_document_id if document else None)
-                if source_id is None:
-                    raise ProviderError(ErrorCode.NOT_FOUND, "로컬 문서가 없으며 상세 조회 식별자가 제공되지 않았습니다.")
-                if selected_provider == self.provider.name:
-                    target_value = target or (str(document.metadata.get("target")) if document and document.metadata.get("target") else None)
-                    if target_value is None:
-                        raise ProviderError(ErrorCode.INVALID_REQUEST, "법제처 상세 조회에는 target이 필요합니다.")
-                    if document is not None and source_document_id is None:
-                        upstream_ids = document.metadata.get("upstream_identifiers") or {}
-                        requested_mst = document.metadata.get("requested_mst")
-                        known_mst = upstream_ids.get("MST") if isinstance(upstream_ids, Mapping) else None
-                        pinned_mst = requested_mst or (
-                            document.version_id if isinstance(known_mst, list) and document.version_id in known_mst else None
-                        ) if version_id or requested_mst else None
-                        if pinned_mst and identifier_kind.upper() == "ID":
-                            identifier_kind = "MST"
-                        candidates = upstream_ids.get(identifier_kind.upper()) if isinstance(upstream_ids, Mapping) else None
-                        if pinned_mst and identifier_kind.upper() == "MST":
-                            candidates = [pinned_mst]
-                        if not isinstance(candidates, list) or len(candidates) != 1 or not isinstance(candidates[0], str) or not candidates[0]:
-                            raise ProviderError(ErrorCode.INCOMPLETE_RESULT, "저장된 검색 항목에서 요청 식별자 종류를 유일하게 확인할 수 없습니다. 공식 ID 또는 MST를 명시하십시오.")
-                        source_id = candidates[0]
-                    try:
-                        _, documents, reused = self._collect_detail(
-                            LegalTarget(target_value),
-                            identifier=source_id,
-                            identifier_kind=identifier_kind,
-                            effective_on=effective_on,
-                            article=article,
-                            response_type=response_type,
+            cached = document
+            refreshed = refresh or document is None
+            try:
+                if refresh or document is None:
+                    selected_provider = _provider_name(provider, document.provider if document else self.provider.name)
+                    if selected_provider == "all":
+                        raise ProviderError(ErrorCode.INVALID_REQUEST, "상세 조회는 provider 하나를 지정해야 합니다.")
+                    source_id = source_document_id or (document.source_document_id if document else None)
+                    if source_id is None:
+                        raise ProviderError(ErrorCode.NOT_FOUND, "로컬 문서가 없으며 상세 조회 식별자가 제공되지 않았습니다.")
+                    if selected_provider == self.provider.name:
+                        target_value = target or (str(document.metadata.get("target")) if document and document.metadata.get("target") else None)
+                        if target_value is None:
+                            raise ProviderError(ErrorCode.INVALID_REQUEST, "법제처 상세 조회에는 target이 필요합니다.")
+                        if document is not None and source_document_id is None:
+                            upstream_ids = document.metadata.get("upstream_identifiers") or {}
+                            requested_mst = document.metadata.get("requested_mst")
+                            known_mst = upstream_ids.get("MST") if isinstance(upstream_ids, Mapping) else None
+                            pinned_mst = requested_mst or (
+                                document.version_id if isinstance(known_mst, list) and document.version_id in known_mst else None
+                            ) if version_id or requested_mst else None
+                            if pinned_mst and identifier_kind.upper() == "ID":
+                                identifier_kind = "MST"
+                            candidates = upstream_ids.get(identifier_kind.upper()) if isinstance(upstream_ids, Mapping) else None
+                            if pinned_mst and identifier_kind.upper() == "MST":
+                                candidates = [pinned_mst]
+                            if not isinstance(candidates, list) or len(candidates) != 1 or not isinstance(candidates[0], str) or not candidates[0]:
+                                raise ProviderError(ErrorCode.INCOMPLETE_RESULT, "저장된 검색 항목에서 요청 식별자 종류를 유일하게 확인할 수 없습니다. 공식 ID 또는 MST를 명시하십시오.")
+                            source_id = candidates[0]
+                        law_id = document.source_document_id if document is not None else source_id if identifier_kind.upper() == "ID" else None
+                        if target_value == LegalTarget.EFFECTIVE_LAW.value and not effective_on and document is not None and document.effective_from:
+                            # 시행일 법령은 날짜가 필수다. 고른 시행본의 시행일을 이미 알면 그 버전 그대로 쓴다(E2E Q10).
+                            effective_on, law_id = str(document.effective_from), None
+                        if effective_on and target_value in {LegalTarget.LAW.value, LegalTarget.EFFECTIVE_LAW.value} and law_id:
+                            # 기준일을 주면 거절하지 않고 그날 시행 중이던 공포본(MST+그 시행일)으로 받는다.
+                            # MST에 그 공포본의 시행일이 아닌 날짜를 붙이면 법제처가 안내 HTML을
+                            # 돌려주고, 이것이 "미신청" 오류로 잘못 보였다(2026-10-03 E2E Q10·Q12).
+                            source_id, effective_on, note = self._version_on(law_id, effective_on)
+                            target_value, identifier_kind = LegalTarget.EFFECTIVE_LAW.value, "MST"
+                            warnings.append(note)
+                        try:
+                            stored = (document or self.repository.get_document(f"law-go:{LegalTarget.PRECEDENT.value}:{source_id}")) if target_value == LegalTarget.PRECEDENT.value else None
+                            if stored is not None and stored.metadata.get("데이터출처명") == "국세법령정보시스템":
+                                # 검색 결과가 이미 국세청 출처라고 알려 준 판례는 법제처에 본문이 없다.
+                                # 실패할 요청을 보내지 않고 바로 국세청 판결문으로 간다.
+                                raise ProviderError(ErrorCode.INCOMPLETE_RESULT, "법제처에 본문이 없는 국세청 출처 판례입니다.", details={"precedent_body_unavailable": True})
+                            _, documents, reused = self._collect_detail(
+                                LegalTarget(target_value),
+                                identifier=source_id,
+                                identifier_kind=identifier_kind,
+                                effective_on=effective_on,
+                                article=article,
+                                response_type=response_type,
+                                run_id=run_id,
+                            )
+                        except ProviderError as exc:
+                            if not exc.details.get("precedent_body_unavailable"):
+                                raise
+                            documents, reused = self._nts_precedent_body(source_id, exc, run_id), False
+                            warnings.append(
+                                f"법제처 판례 {source_id}는 국세청 출처라 법제처 API에 본문이 없습니다. "
+                                f"같은 사건번호의 국세청 원문({documents[0].document_id})을 반환했습니다. 인용은 이 document_id로 하십시오."
+                            )
+                    else:
+                        adapter = self.nts_provider if selected_provider == self.nts_provider.name else self.olta_provider
+                        category = source_category or (str(document.metadata.get("category")) if document and document.metadata.get("category") else None)
+                        action = "attachment" if attachment or (document is not None and document.document_type == "nts_attachment") else "detail"
+                        _, documents, reused = self._collect_supplemental_detail(
+                            adapter,
+                            action=action,
+                            source_document_id=source_id,
+                            category=category,
                             run_id=run_id,
                         )
-                    except ProviderError as exc:
-                        if not exc.details.get("precedent_body_unavailable"):
-                            raise
-                        documents, reused = self._nts_precedent_body(source_id, exc, run_id), False
-                        warnings.append(
-                            f"법제처 판례 {source_id}는 국세청 출처라 법제처 API에 본문이 없습니다. "
-                            f"같은 사건번호의 국세청 원문({documents[0].document_id})을 반환했습니다. 인용은 이 document_id로 하십시오."
-                        )
-                else:
-                    adapter = self.nts_provider if selected_provider == self.nts_provider.name else self.olta_provider
-                    category = source_category or (str(document.metadata.get("category")) if document and document.metadata.get("category") else None)
-                    action = "attachment" if attachment or (document is not None and document.document_type == "nts_attachment") else "detail"
-                    _, documents, reused = self._collect_supplemental_detail(
-                        adapter,
-                        action=action,
-                        source_document_id=source_id,
-                        category=category,
-                        run_id=run_id,
-                    )
-                if not documents:
-                    raise ProviderError(ErrorCode.NOT_FOUND, "상세 응답에서 문서를 찾지 못했습니다.")
-                document = documents[0]
-                if version_id and document.version_id != version_id:
-                    raise ProviderError(ErrorCode.TEMPORAL_UNRESOLVED, "상세 응답이 요청한 version_id와 일치하지 않습니다.")
-                if reused:
-                    warnings.append("같은 수집 창의 완료 run을 재사용했습니다.")
+                    if not documents:
+                        raise ProviderError(ErrorCode.NOT_FOUND, "상세 응답에서 문서를 찾지 못했습니다.")
+                    document = documents[0]
+                    if version_id and document.version_id != version_id:
+                        raise ProviderError(ErrorCode.TEMPORAL_UNRESOLVED, "상세 응답이 요청한 version_id와 일치하지 않습니다.")
+                    if reused:
+                        warnings.append("같은 수집 창의 완료 run을 재사용했습니다.")
+            except (ProviderError, TransportError) as exc:
+                # 새로 받으려다 기관이 일시적으로 응답하지 않으면, 이미 받아 둔 원문을
+                # 수집 시각과 함께 돌려준다. 저장본이 없거나 영구 오류면 그대로 올린다.
+                # 요청하지 않은 자동 갱신이 실패하면(키 없음 포함) 예전처럼 저장본을 돌려준다.
+                if cached is None or (getattr(exc, "code", None) not in _TRANSIENT_CODES and not auto_refresh):
+                    raise
+                document, refreshed = cached, False
+                warnings.append(f"공식 출처를 새로 확인하지 못해({exc.code.value}) {cached.retrieved_at}에 받아 둔 저장본을 반환했습니다. 본문이 없으면 원문은 미확보이며, 그 이후 개정 여부도 확인되지 않았습니다.")
             if document is None:
                 raise ProviderError(ErrorCode.NOT_FOUND, "법률 문서를 찾지 못했습니다.")
             if document.metadata.get("version_identity_source") == "request_mst":
@@ -482,8 +623,15 @@ class LegalKnowledgeService:
                 or not document.sections
                 or incomplete_law_articles(document)
             )
-            if original_incomplete:
-                warnings.append("검색 메타데이터나 불완전한 원문만 저장되어 있습니다. 원문이 필요하면 공식 식별자를 확인하고 refresh=true로 다시 조회하십시오.")
+            code = jo_code(article) if article and document.provider == self.provider.name else None
+            label = f"제{int(code[:4])}조" + (f"의{int(code[4:])}" if int(code[4:]) else "") if code else None
+            if label and refreshed and not any(section.locator == label for section in document.sections):
+                warnings.append(f"법제처 응답에 {label} 조문이 없습니다. 이 시행본에 해당 조문이 없을 수 있습니다(부존재는 확인되지 않음). article 없이 조회해 조문 목록을 확인하십시오.")
+            elif original_incomplete:
+                warnings.append(
+                    "새로 조회했지만 공식 응답에 본문이 없습니다. 같은 요청을 반복하지 말고 식별자나 조문을 확인하십시오." if refreshed
+                    else "검색 메타데이터나 불완전한 원문만 저장되어 있습니다. 원문이 필요하면 공식 식별자를 확인하고 refresh=true로 다시 조회하십시오."
+                )
             sections, next_cursor, truncated = self._page_sections(document.sections, section_index, character_offset, max_chars)
             data = document.model_dump(mode="json")
             data["sections"] = [section.model_dump(mode="json") for section in sections]
@@ -495,7 +643,8 @@ class LegalKnowledgeService:
                 request_id=rid,
                 status=ResponseStatus.PARTIAL if original_incomplete else ResponseStatus.OK,
                 data=data,
-                sources=[_source(document, section.locator) for section in sections] or [_source(document)],
+                # 출처는 문서당 하나다. 절마다 붙이면 짧은 조문이 많은 법령에서 응답이 10만 자를 넘었다.
+                sources=[_source(document)],
                 warnings=warnings,
                 pagination=Pagination(page=section_index + 1, page_size=len(sections), total=len(document.sections), next_cursor=next_cursor, truncated=truncated),
                 coverage=Coverage(queried_providers=[document.provider], succeeded_providers=[document.provider], fetched=1, truncated=truncated, next_cursor=next_cursor),
@@ -504,13 +653,28 @@ class LegalKnowledgeService:
         except (ProviderError, TransportError, ValueError, OSError) as exc:
             return self._error_response(rid, exc, provider=selected_provider)
 
-    def _selected_document(self, document_id: str, version_id: str | None) -> LegalDocument | None:
+    def _selected_document(self, document_id: str, version_id: str | None, notes: list[str] | None = None) -> LegalDocument | None:
         try:
             return self.repository.get_document(document_id, version_id=version_id)
         except AmbiguousDocumentVersion as exc:
-            raise ProviderError(
-                ErrorCode.TEMPORAL_UNRESOLVED, str(exc), details={"available_version_ids": exc.versions}
-            ) from exc
+            if notes is None:
+                raise ProviderError(
+                    ErrorCode.TEMPORAL_UNRESOLVED, str(exc), details={"available_version_ids": exc.versions}
+                ) from exc
+            # 원문 열람은 버전을 몰라도 막지 않는다. 오늘 시행 중인 시행본을 열고 나머지를 알린다.
+            # 인용 검증은 여전히 version_id가 있어야 통과한다.
+            today = utc_now()[:10]
+            editions = [edition for edition in (self.repository.get_document(document_id, version_id=v) for v in exc.versions) if edition]
+            if not editions:
+                return None
+            current = max(editions, key=lambda d: (str(d.effective_from or "") <= today, str(d.effective_from or ""), str(d.promulgated_on or "")))
+            others = [v for v in exc.versions if v != current.version_id]
+            notes.append(
+                f"저장된 시행본이 여러 개라 오늘 시행 중인 버전(version_id {current.version_id}, 시행 {current.effective_from})을 열었습니다. "
+                + (f"다른 버전: {', '.join(others)}. " if others else "버전 ID가 없는 이전 수집본도 저장되어 있습니다. ")
+                + "특정 시점은 version_id나 effective_on으로 지정하십시오."
+            )
+            return current
 
     def get_applicable_law(
         self,
@@ -524,8 +688,14 @@ class LegalKnowledgeService:
     ) -> LegalToolResponse:
         rid = request_id()
         try:
+            if document_id and ":" not in document_id and not (mst or law_id):
+                # 모델이 법령명을 document_id 자리에 넣는 경우가 있다(E2E Q12 "소득세법").
+                law_id, document_id = self._law_id_by_name(document_id), None
             if bool(mst) == bool(law_id) and document_id is None:
-                raise ProviderError(ErrorCode.INVALID_REQUEST, "MST 또는 ID 중 하나만 제공해야 합니다.")
+                raise ProviderError(
+                    ErrorCode.INVALID_REQUEST,
+                    "어느 법령인지 하나만 지정하십시오: law_id(법령ID), mst, 또는 document_id에 법령명(예: '부가가치세법').",
+                )
             if version_id and not document_id:
                 raise ProviderError(ErrorCode.INVALID_REQUEST, "version_id에는 document_id가 필요합니다.")
             warnings: list[str] = []
@@ -560,10 +730,14 @@ class LegalKnowledgeService:
                         else "시점 조회에는 mst(일련번호) 또는 law_id(법령ID)가 필요합니다.",
                         details={"provided": sorted(name for name, value in (("document_id", document_id), ("mst", mst), ("law_id", law_id)) if value)},
                     )
+                version_day = effective_on
                 if law_id and not mst:
-                    raise ProviderError(ErrorCode.TEMPORAL_UNRESOLVED, "법령 ID 방식은 기준일 efYd를 적용하지 않습니다. 해당 시행 버전 MST를 찾아 다시 요청하십시오.")
+                    # 법령ID만 받으면 법제처 시행일 목록에서 그날 시행 중이던 공포본을 찾는다.
+                    mst, version_day, note = self._version_on(law_id, effective_on)
+                    identifier = mst
+                    warnings.append(note)
                 kind = "MST" if mst else "ID"
-                _, documents, _ = self._collect_detail(LegalTarget.EFFECTIVE_LAW, identifier=identifier, identifier_kind=kind, effective_on=effective_on)
+                _, documents, _ = self._collect_detail(LegalTarget.EFFECTIVE_LAW, identifier=identifier, identifier_kind=kind, effective_on=version_day)
                 if version_id and any(document.version_id != version_id for document in documents):
                     raise ProviderError(ErrorCode.TEMPORAL_UNRESOLVED, "시점 조회 결과가 요청한 version_id와 일치하지 않습니다.")
             candidates, temporal_warnings = temporal_candidates(documents, effective_on)
@@ -835,7 +1009,8 @@ class LegalKnowledgeService:
         warnings: list[str] = []
         if selected_provider in {self.provider.name, "all"}:
             if target is None and selected_provider == self.provider.name:
-                raise ProviderError(ErrorCode.INVALID_REQUEST, "법제처 upstream 검색에는 target이 필요합니다.")
+                target = LegalTarget.LAW.value
+                warnings.append("target이 없어 법령(law)을 검색했습니다. 판례는 target=prec, 조세심판은 ttSpecialDecc로 지정하십시오.")
             if target is not None:
                 selected.append((self.provider.name, self.provider))
             elif selected_provider == "all":
@@ -981,6 +1156,52 @@ class LegalKnowledgeService:
             return values
         raise ProviderError(ErrorCode.INVALID_REQUEST, "지원하지 않는 보완 provider입니다.")
 
+    def _law_id_by_name(self, name: str) -> str:
+        """정식 법령명(약칭 포함)을 법제처 법령ID로 바꾼다. 제목이 정확히 같은 것만 받는다."""
+        result = self.provider.search(LegalTarget.LAW, query=name.strip(), display=20)
+        wanted = expand_tax_law_alias(name.strip())
+        exact = [item for item in result.items if item["title"] == wanted]
+        if len(exact) != 1:
+            raise ProviderError(ErrorCode.NOT_FOUND, f"'{name}'과 이름이 정확히 같은 법령을 찾지 못했습니다. search_legal_sources로 법령을 찾아 law_id를 지정하십시오.")
+        return str(exact[0]["source_document_id"])
+
+    def _version_on(self, law_id: str, on_date: str) -> tuple[str, str, str]:
+        """법령ID와 기준일로 그날 시행 중이던 공포본의 (MST, 시행일, 안내문)을 찾는다.
+
+        법제처 시행일 목록(target=eflaw)에서 같은 법령ID 중 시행일이 기준일 이하인 줄을
+        고르고, 같은 시행일이면 나중 공포본을 쓴다(부가가치세법 2024-01-01 실측: 공포
+        2022-12-31·2023-12-31 두 공포본이 같은 날 시행).
+        """
+        day = self.provider._compact_date(on_date)
+        on = f"{day[:4]}-{day[4:6]}-{day[6:]}"
+        title = None
+        for prefix in ("law-go:law:", "law-go:eflaw:"):
+            try:
+                found = self.repository.get_document(prefix + law_id)
+            except AmbiguousDocumentVersion as exc:
+                found = self.repository.get_document(prefix + law_id, version_id=exc.versions[0])
+            if found:
+                title = found.title
+                break
+        if title is None:
+            _, documents, _ = self._collect_detail(LegalTarget.LAW, identifier=law_id, identifier_kind="ID", effective_on=None, article=None, response_type="JSON", run_id=None)
+            title = documents[0].title if documents else None
+        if not title:
+            raise ProviderError(ErrorCode.NOT_FOUND, "법령ID로 법령명을 확인하지 못해 시점 버전을 찾을 수 없습니다. search_legal_sources로 법령을 먼저 찾으십시오.")
+        rows: list[dict[str, Any]] = []
+        for page in range(1, 6):
+            result = self.provider.search(LegalTarget.EFFECTIVE_LAW, query=title, page=page, display=100)
+            rows.extend(item for item in result.items if item["source_document_id"] == law_id and item.get("version_id") and item.get("effective_from"))
+            if page * 100 >= (result.total or 0) or any(row["effective_from"] <= on for row in rows):
+                break
+        in_force = [row for row in rows if row["effective_from"] <= on]
+        if not in_force:
+            raise ProviderError(ErrorCode.TEMPORAL_UNRESOLVED, f"{title}의 시행일 목록에서 {on} 당시 시행 중인 버전을 찾지 못했습니다. 최초 시행 전 날짜일 수 있습니다.")
+        best = max(in_force, key=lambda row: (row["effective_from"], row.get("promulgated_on") or ""))
+        note = (f"{on} 기준으로 그날 시행 중이던 {title} 시행본(시행 {best['effective_from']}, 공포 {best.get('promulgated_on')}, MST {best['version_id']})을 조회했습니다. "
+                "부칙 경과규정에 따라 실제 적용 조문이 다를 수 있습니다.")
+        return str(best["version_id"]), best["effective_from"], note
+
     def _nts_precedent_body(self, law_go_id: str, cause: ProviderError, run_id: str | None) -> list[LegalDocument]:
         """법제처에 본문이 없는 국세청 출처 판례를 사건번호로 국세청에서 받는다.
 
@@ -1014,11 +1235,26 @@ class LegalKnowledgeService:
         )
         return documents
 
+    def _start_run(self, **kwargs) -> dict[str, Any]:
+        """같은 요청을 다른 호출·프로세스가 수집 중이면 끝날 때까지 잠깐 기다린다.
+
+        모델의 병렬 도구 호출이나 Claude·Codex 동시 사용에서 두 번째 호출이
+        "이미 실행 중" 오류로 끝나던 문제(2026-10-04 두 서버 동시 실행 실측).
+        완료되면 그 결과를 재사용하고, 실패했으면 이어받아 직접 수집한다.
+        """
+        run = self.repository.start_run(**kwargs)
+        remaining = remaining_seconds()
+        deadline = time.monotonic() + min(20.0, remaining if remaining is not None else 20.0)
+        while run["status"] == "running" and not run["claimed"] and time.monotonic() < deadline:
+            time.sleep(0.3)
+            run = self.repository.start_run(**kwargs)
+        return run
+
     def _collect_supplemental_search(self, adapter, **kwargs) -> tuple[SupplementalResult, list[LegalDocument], bool]:
         run_id = kwargs.pop("run_id", None)
         request = {**kwargs, "parser_version": adapter.capabilities()["parser_version"], "collection_window": utc_now()[:10]}
         started = utc_now()
-        run = self.repository.start_run(
+        run = self._start_run(
             provider=adapter.name,
             action="search",
             request=request,
@@ -1083,7 +1319,7 @@ class LegalKnowledgeService:
             "collection_window": utc_now()[:10],
         }
         started = utc_now()
-        run = self.repository.start_run(provider=adapter.name, action=action, request=request, started_at=started, run_id=run_id, resume=True)
+        run = self._start_run(provider=adapter.name, action=action, request=request, started_at=started, run_id=run_id, resume=True)
         if run["status"] == "completed":
             documents = self.repository.documents_for_run(run["run_id"])
             cached = SupplementalResult(adapter.name, documents[0].document_type if documents else "supplemental_document", request, self._cached_response(adapter.name), {}, [], len(documents), 1, len(documents))
@@ -1274,7 +1510,7 @@ class LegalKnowledgeService:
         run_id = kwargs.pop("run_id", None)
         request = {"target": target.value, **kwargs, "collection_window": utc_now()[:10]}
         started = utc_now()
-        run = self.repository.start_run(
+        run = self._start_run(
             provider=self.provider.name,
             action="search",
             request=request,
@@ -1307,7 +1543,7 @@ class LegalKnowledgeService:
         run_id = kwargs.pop("run_id", None)
         request = {"target": target.value, **kwargs, "parser_version": PARSER_VERSION, "collection_window": utc_now()[:10]}
         started = utc_now()
-        run = self.repository.start_run(
+        run = self._start_run(
             provider=self.provider.name,
             action="detail",
             request=request,
@@ -1368,7 +1604,7 @@ class LegalKnowledgeService:
     def _unapplied_filter_warnings(filters: Mapping[str, str] | None) -> list[str]:
         """filters는 upstream 검색에만 전달된다. 로컬 색인에는 적용되지 않는다.
 
-        upstream 경로는 지원하지 않는 필터를 INVALID_REQUEST로 거부하지만,
+        upstream 경로는 지원하지 않는 필터를 빼고 경고하지만,
         로컬 경로는 값을 받아놓고 아무 데도 쓰지 않은 채 결과를 돌려줬다.
         지정한 쪽에서는 걸러진 결과를 보고 있다고 오해하게 된다. 받아놓고
         조용히 무시하는 것이 가장 나쁘다.
@@ -1476,7 +1712,13 @@ class LegalKnowledgeService:
         while index < len(sections):
             original = sections[index]
             text = original.text[character_offset:]
+            # 절마다 붙는 필드(section_id·kind·locator 등)도 응답 크기다. 짧은 조문이 수백 개인
+            # 시행규칙은 본문보다 이 필드가 커서 max_chars의 세 배 가까이 나갔다.
+            if selected:
+                used += _SECTION_OVERHEAD_CHARS
             remaining = max_chars - used
+            if selected and remaining <= 0:
+                return selected, f"{index}:{character_offset}" if character_offset else str(index), True
             if not text:
                 index += 1
                 character_offset = 0
@@ -1555,6 +1797,7 @@ class LegalKnowledgeService:
         return LegalToolResponse(
             request_id=rid,
             status=status,
+            warnings=[_next_step(code, message)],
             error=ToolError(code=code, message=message, retryable=retryable, details=details),
             coverage=Coverage(queried_providers=[provider] if provider else [], failed_providers=failed, disabled_providers=disabled),
         )

@@ -76,8 +76,23 @@ def default_claude_desktop_config() -> Path:
         return Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
     if os.name != "nt":
         raise InstallationError("Claude Desktop 자동 등록은 Windows·macOS에서만 지원합니다.")
-    configured = os.environ.get("APPDATA", "").strip()
-    base = Path(configured).expanduser() if configured else Path.home() / "AppData" / "Roaming"
+    local = os.environ.get("LOCALAPPDATA", "").strip()
+    roaming = os.environ.get("APPDATA", "").strip()
+    return windows_claude_desktop_config(
+        Path(local).expanduser() if local else Path.home() / "AppData" / "Local",
+        Path(roaming).expanduser() if roaming else Path.home() / "AppData" / "Roaming",
+    )
+
+
+def windows_claude_desktop_config(local_app_data: Path, app_data: Path) -> Path:
+    """Windows Claude Desktop이 실제로 읽는 설정 파일.
+
+    공식 설치본은 MSIX 패키지라 %APPDATA%\\Claude 대신 패키지 가상 경로
+    (%LOCALAPPDATA%\\Packages\\Claude_*\\LocalCache\\Roaming\\Claude)를 읽는다.
+    %APPDATA%에 쓰면 설치는 성공해도 도구가 나타나지 않는다(anthropics/claude-code #26073·#29100).
+    """
+    packages = sorted((local_app_data / "Packages").glob("Claude_*/LocalCache/Roaming"))
+    base = packages[0] if packages else app_data
     return base / "Claude" / "claude_desktop_config.json"
 
 

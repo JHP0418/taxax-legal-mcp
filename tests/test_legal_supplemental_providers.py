@@ -93,7 +93,10 @@ class CapturingOpener:
 
     def open(self, request, timeout):
         self.requests.append(request)
-        return self.responses.pop(0)
+        value = self.responses.pop(0)
+        if isinstance(value, BaseException):
+            raise value
+        return value
 
 
 class SessionTransportTests(unittest.TestCase):
@@ -121,6 +124,23 @@ class SessionTransportTests(unittest.TestCase):
             transport.request(ACTION_URL, max_bytes=10)
         with self.assertRaises(TransportError):
             transport.request(ACTION_URL, max_bytes=5)
+
+
+    def test_retries_one_transient_failure_but_not_access_denials(self):
+        sleeps: list[float] = []
+        opener = CapturingOpener([TimeoutError("timed out"), RawResponse(b"ok")])
+        transport = SessionHttpTransport("taxlaw.nts.go.kr", min_interval_seconds=0, opener=opener, sleeper=sleeps.append)
+        self.assertEqual(transport.request(ACTION_URL).body, b"ok")
+        self.assertEqual((len(opener.requests), sleeps), (2, [1.0]))
+        opener = CapturingOpener([TimeoutError("timed out"), TimeoutError("timed out"), RawResponse(b"ok")])
+        transport = SessionHttpTransport("taxlaw.nts.go.kr", min_interval_seconds=0, opener=opener, sleeper=lambda _: None)
+        with self.assertRaises(TransportError):
+            transport.request(ACTION_URL)
+        self.assertEqual(len(opener.requests), 2)
+        opener = CapturingOpener([RawResponse(b"<html>blocked</html>", content_type="text/html", url="https://example.com/x"), RawResponse(b"ok")])
+        with self.assertRaises(TransportError):
+            SessionHttpTransport("taxlaw.nts.go.kr", min_interval_seconds=0, opener=opener, sleeper=lambda _: None).request(ACTION_URL)
+        self.assertEqual(len(opener.requests), 1)
 
 
 class NtsProviderTests(unittest.TestCase):
@@ -342,7 +362,8 @@ class NtsProviderTests(unittest.TestCase):
             self.assertEqual((result.data["court"], result.data["case_no"], result.data["decided_on"]), ("수원고등법원", "2025누688", "2026-01-14"))
             self.assertEqual(result.data["content_completeness"], "complete")
             self.assertTrue(any("국세청 원문" in warning for warning in result.warnings))
-            self.assertEqual([call["type"] for call in law.calls], ["JSON", "JSON"])
+            # 검색 결과가 국세청 출처라고 알려 주므로 법제처 상세는 부르지 않는다.
+            self.assertEqual([call.get("query") for call in law.calls], ["2025누688"])
             checked = service.verify_legal_citations(citations=[
                 {"document_id": result.data["document_id"], "locator": "판결문", "quote": "원고들의 항소를 모두 기각한다.", "expected_date": "2026-01-14"},
             ])

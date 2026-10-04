@@ -1,0 +1,15 @@
+{
+  "name": "taxax-legal",
+  "owner": {
+    "name": "Park JH",
+    "url": "https://github.com/JHP0418"
+  },
+  "description": "TAXax 세무 법률 근거 플러그인 (법제처·국세청·지방세 원문 조회와 인용 검증)",
+  "plugins": [
+    {
+      "name": "taxax-legal",
+      "source": "./plugins/taxax-legal",
+      "description": "법제처·국세청·지방세 공식 원문으로 세무 근거를 찾고 인용 문구를 원문과 대조합니다."
+    }
+  ]
+}

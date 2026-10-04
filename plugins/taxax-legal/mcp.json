@@ -1,0 +1,10 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "taxax-legal": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["--from", "taxax-legal-mcp @ https://github.com/JHP0418/taxax-legal-mcp/archive/refs/tags/v0.2.18.zip", "taxax-legal-mcp", "--transport", "stdio"]
+    }
+  }
+}

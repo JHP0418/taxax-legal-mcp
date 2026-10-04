@@ -77,10 +77,12 @@ class SequenceOpener:
         self.values = list(values)
         self.calls = 0
         self.timeouts: list[float] = []
+        self.requests: list = []
 
     def open(self, request, timeout):
         self.calls += 1
         self.timeouts.append(timeout)
+        self.requests.append(request)
         value = self.values.pop(0)
         if isinstance(value, BaseException):
             raise value
@@ -159,11 +161,38 @@ class LawGoProviderTests(unittest.TestCase):
         self.assertEqual(transport.calls[0][1]["OC"], "operator-secret")
         self.assertNotIn("operator-secret", LawGoProvider.detail_url(LegalTarget.LAW, "000123"))
 
-    def test_unsupported_filter_and_itmno_query_are_rejected(self):
-        provider, _ = self.provider()
-        with self.assertRaises(ProviderError) as unsupported:
-            provider.search(LegalTarget.LAW, query="법인세법", filters={"unknown": "x"})
-        self.assertEqual(unsupported.exception.code, ErrorCode.INVALID_REQUEST)
+    def test_tax_law_aliases_expand_to_official_names(self):
+        from taxax.legal.providers.law_go import expand_tax_law_alias
+
+        for query, expected in (("상증법", "상속세 및 증여세법"), ("상증법 시행령", "상속세 및 증여세법 시행령"),
+                                ("조특령", "조세특례제한법 시행령"), ("국기칙", "국세기본법 시행규칙"),
+                                ("부가세법 제16조", "부가가치세법 제16조"), ("법인세법", "법인세법"), ("대손금", "대손금")):
+            self.assertEqual(expand_tax_law_alias(query), expected, query)
+        provider, transport = self.provider()
+        result = provider.search(LegalTarget.LAW, query="조특법")
+        self.assertEqual(transport.calls[-1][1]["query"], "조세특례제한법")
+        self.assertTrue(any("정식 법령명" in warning for warning in result.warnings))
+        provider.search(LegalTarget.PRECEDENT, query="조특법")
+        self.assertEqual(transport.calls[-1][1]["query"], "조특법")
+
+    def test_article_accepts_korean_notation(self):
+        from taxax.legal.providers.law_go import jo_code
+
+        for article, code in (("제60조", "006000"), ("60조", "006000"), ("60", "006000"), ("제2조의3", "000203"),
+                              ("제 19 조의 2", "001902"), ("006000", "006000")):
+            self.assertEqual(jo_code(article), code, article)
+        for bad in ("제60항", "제12345조", "부칙", ""):
+            self.assertIsNone(jo_code(bad), bad)
+        provider, transport = self.provider("law_detail.json")
+        provider.detail(LegalTarget.LAW, identifier="000123", article="제2조의3")
+        self.assertEqual(transport.calls[-1][1]["JO"], "000203")
+
+    def test_unsupported_filter_is_dropped_with_warning_and_itmno_query_is_rejected(self):
+        provider, transport = self.provider()
+        result = provider.search(LegalTarget.LAW, query="법인세법", filters={"unknown": "x", "efYd": "20260101"})
+        self.assertNotIn("unknown", transport.calls[-1][1])
+        self.assertEqual(transport.calls[-1][1]["efYd"], "20260101")
+        self.assertTrue(any("unknown" in warning for warning in result.warnings))
         with self.assertRaises(ProviderError):
             provider.search(LegalTarget.NTS_INTERPRETATION, query="대손", filters={"itmno": "1"})
 
@@ -358,26 +387,42 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(opener.calls, 2)
         self.assertEqual(sleeps, [1])
 
-    def test_default_does_not_amplify_official_failures(self):
+    def test_default_retries_transient_failures_once_but_never_rate_limits(self):
         url = "https://www.law.go.kr/DRF/lawSearch.do"
-        cases = (
-            (TimeoutError("timed out"), ErrorCode.UPSTREAM_UNAVAILABLE),
-            (HTTPError(url, 429, "limited", Message(), None), ErrorCode.RATE_LIMITED),
-            (HTTPError(url, 503, "unavailable", Message(), None), ErrorCode.UPSTREAM_UNAVAILABLE),
-            (HTTPError(url, 404, "indeterminate", Message(), None), ErrorCode.UPSTREAM_UNAVAILABLE),
-            (FakeHttpResponse(status=429), ErrorCode.RATE_LIMITED),
+        transient = (
+            TimeoutError("timed out"),
+            HTTPError(url, 503, "unavailable", Message(), None),
+            HTTPError(url, 404, "indeterminate", Message(), None),
         )
-        for failed_response, code in cases:
-            with self.subTest(error=type(failed_response).__name__, code=code):
+        for failed_response in transient:
+            with self.subTest(recovers=type(failed_response).__name__):
                 opener = SequenceOpener([failed_response, FakeHttpResponse()])
                 sleeps: list[float] = []
-                transport = HttpTransport(min_interval_seconds=0, sleeper=sleeps.append, opener=opener)
+                response = HttpTransport(min_interval_seconds=0, sleeper=sleeps.append, opener=opener).request(url)
+                self.assertEqual(response.attempts, 2)
+                self.assertEqual(opener.calls, 2)
+                self.assertEqual(len(sleeps), 1)
+            with self.subTest(gives_up=type(failed_response).__name__):
+                opener = SequenceOpener([failed_response, failed_response, FakeHttpResponse()])
                 with self.assertRaises(TransportError) as caught:
-                    transport.request(url)
-                self.assertEqual(caught.exception.code, code)
-                self.assertEqual(caught.exception.details["attempts"], 1)
+                    HttpTransport(min_interval_seconds=0, sleeper=lambda _: None, opener=opener).request(url)
+                self.assertEqual(caught.exception.code, ErrorCode.UPSTREAM_UNAVAILABLE)
+                self.assertEqual(caught.exception.details["attempts"], 2)
+                self.assertEqual(opener.calls, 2)
+        for limited in (HTTPError(url, 429, "limited", Message(), None), FakeHttpResponse(status=429)):
+            with self.subTest(rate_limited=type(limited).__name__):
+                opener = SequenceOpener([limited, FakeHttpResponse()])
+                sleeps = []
+                with self.assertRaises(TransportError) as caught:
+                    HttpTransport(min_interval_seconds=0, sleeper=sleeps.append, opener=opener).request(url)
+                self.assertEqual(caught.exception.code, ErrorCode.RATE_LIMITED)
                 self.assertEqual(opener.calls, 1)
                 self.assertEqual(sleeps, [])
+
+    def test_law_go_requests_carry_referer(self):
+        opener = SequenceOpener([FakeHttpResponse()])
+        HttpTransport(min_interval_seconds=0, opener=opener).request("https://www.law.go.kr/DRF/lawSearch.do")
+        self.assertEqual(opener.requests[0].get_header("Referer"), "https://www.law.go.kr/")
 
     def test_explicit_retries_do_not_override_rate_limit_hold(self):
         url = "https://www.law.go.kr/DRF/lawSearch.do"

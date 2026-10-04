@@ -23,7 +23,7 @@ from taxax.legal.providers.base import LegalTarget, ProviderError
 from taxax.legal.providers.korean_law_bridge import KoreanLawBridge
 from taxax.legal.providers.law_go import PARSER_VERSION, LawGoProvider
 from taxax.legal.service import LegalKnowledgeService
-from taxax.legal.transport import HttpResponse
+from taxax.legal.transport import HttpResponse, TransportError
 
 FIXTURES = Path(__file__).parent / "legal_fixtures"
 
@@ -131,15 +131,39 @@ class LegalServiceTests(unittest.TestCase):
             service, transport = self.make_service(Path(directory))
             search = service.search_legal_sources(query="법인세법", target="law", upstream=True)
             document_id = search.data["items"][0]["document_id"]
-            cached = service.get_legal_document(document_id=document_id)
-            self.assertEqual(cached.status, ResponseStatus.PARTIAL)
-            self.assertFalse(cached.data["sections"])
-            self.assertTrue(any("refresh=true" in warning for warning in cached.warnings))
-            self.assertEqual(len(transport.calls), 1, "로컬 메타데이터 조회가 원격 호출을 해서는 안 됩니다")
-            detailed = service.get_legal_document(document_id=document_id, refresh=True)
+            # 검색 결과(메타데이터)만 저장된 문서를 열면 refresh 없이도 공식 원문을 받는다.
+            detailed = service.get_legal_document(document_id=document_id)
+            self.assertEqual(len(transport.calls), 2)
             self.assertEqual(detailed.status, ResponseStatus.OK)
             self.assertEqual(transport.calls[-1]["ID"], "000123")
             self.assertEqual(detailed.data["document_id"], document_id)
+
+    def test_source_search_without_title_match_in_store_queries_the_source(self):
+        """저장소에 본문 언급만 맞는 다른 법령이 있을 때 그것을 정답처럼 돌려주지 않는다(E2E Q15)."""
+        with tempfile.TemporaryDirectory() as directory:
+            service, transport = self.make_service(Path(directory))
+            service.get_legal_document(target="law", source_document_id="000123", refresh=True)
+            before = len(transport.calls)
+            result = service.search_legal_sources(query="소득세법", provider="law.go.kr", target="law")
+            self.assertEqual(len(transport.calls), before + 1)
+            self.assertEqual(transport.calls[-1]["query"], "소득세법")
+            self.assertIn("공식 출처를 검색했습니다", result.warnings[0])
+            local_only = service.search_legal_sources(query="손금")
+            self.assertEqual(len(transport.calls), before + 1, "출처를 지정하지 않은 저장소 검색은 원격 호출을 하지 않는다")
+
+    def test_failed_automatic_body_fetch_returns_the_stored_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service, transport = self.make_service(Path(directory))
+            search = service.search_legal_sources(query="법인세법", target="law", upstream=True)
+
+            def denied(url, *, params=None, secrets=()):
+                raise TransportError(ErrorCode.AUTH_FAILED, "인증 실패")
+
+            transport.request = denied
+            stored = service.get_legal_document(document_id=search.data["items"][0]["document_id"])
+            self.assertEqual(stored.status, ResponseStatus.PARTIAL)
+            self.assertFalse(stored.data["sections"])
+            self.assertTrue(any("AUTH_FAILED" in warning for warning in stored.warnings), stored.warnings)
 
     def test_search_and_detail_share_id_when_detail_omits_mst(self):
         class MissingMstTransport(RoutedTransport):
@@ -192,13 +216,57 @@ class LegalServiceTests(unittest.TestCase):
             self.assertEqual(detail.error.code, ErrorCode.INCOMPLETE_RESULT)
             self.assertEqual(len(transport.calls), 1)
 
-    def test_effective_law_id_and_date_does_not_silently_ignore_date(self):
+    def test_law_id_and_date_resolve_to_the_edition_in_force_that_day(self):
+        """법령ID+기준일은 거절하지 않고 시행일 목록에서 그날 시행본(MST+시행일)을 골라 조회한다."""
+
+        class VersionTransport(RoutedTransport):
+            def request(self, url, *, params=None, secrets=()):
+                parameters = dict(params or {})
+                if url.endswith("lawSearch.do") and parameters.get("target") == "eflaw":
+                    self.calls.append(parameters)
+                    rows = [  # 부가가치세법 2026-10-03 실측 형태
+                        {"법령ID": "000123", "법령일련번호": "276117", "법령명한글": "합성법", "시행일자": "20260102", "공포일자": "20251001", "공포번호": "21065"},
+                        {"법령ID": "000123", "법령일련번호": "257973", "법령명한글": "합성법", "시행일자": "20240101", "공포일자": "20231231", "공포번호": "19931"},
+                        {"법령ID": "000123", "법령일련번호": "247465", "법령명한글": "합성법", "시행일자": "20240101", "공포일자": "20221231", "공포번호": "19194"},
+                        {"법령ID": "000123", "법령일련번호": "247465", "법령명한글": "합성법", "시행일자": "20230701", "공포일자": "20221231", "공포번호": "19194"},
+                        {"법령ID": "000999", "법령일련번호": "999999", "법령명한글": "합성법 시행령", "시행일자": "20231201", "공포일자": "20231130", "공포번호": "1"},
+                    ]
+                    body = json.dumps({"LawSearch": {"totalCnt": len(rows), "page": 1, "law": rows}}, ensure_ascii=False).encode()
+                    return HttpResponse(url=url, status=200, headers={"content-type": "application/json"}, body=body)
+                if url.endswith("lawService.do") and parameters.get("target") == "eflaw":
+                    self.calls.append(parameters)
+                    body = (FIXTURES / "law_detail.json").read_text(encoding="utf-8").replace('"12345"', f'"{parameters["MST"]}"')
+                    return HttpResponse(url=url, status=200, headers={"content-type": "application/json"}, body=body.encode())
+                return super().request(url, params=params, secrets=secrets)
+
         with tempfile.TemporaryDirectory() as directory:
-            service, transport = self.make_service(Path(directory))
-            result = service.get_applicable_law(effective_on="2026-01-02", law_id="000123", refresh=True)
-            self.assertEqual(result.status, ResponseStatus.ERROR)
-            self.assertEqual(result.error.code, ErrorCode.TEMPORAL_UNRESOLVED)
-            self.assertEqual(transport.calls, [])
+            service, _ = self.make_service(Path(directory))
+            transport = VersionTransport()
+            service.provider.transport = transport
+            result = service.get_applicable_law(effective_on="2024-03-15", law_id="000123", refresh=True)
+            detail = transport.calls[-1]
+            self.assertEqual((detail["target"], detail["MST"], detail["efYd"]), ("eflaw", "257973", "20240101"))
+            self.assertTrue(any("MST 257973" in warning for warning in result.warnings), result.warnings)
+            document = service.get_legal_document(target="law", source_document_id="000123", effective_on="2023-08-01", refresh=True)
+            detail = transport.calls[-1]
+            self.assertEqual((detail["target"], detail["MST"], detail["efYd"]), ("eflaw", "247465", "20230701"))
+            self.assertNotEqual(document.status, ResponseStatus.ERROR)
+            before = service.get_applicable_law(effective_on="1990-01-01", law_id="000123", refresh=True)
+            self.assertEqual(before.error.code, ErrorCode.TEMPORAL_UNRESOLVED)
+            # 저장된 시행본 문서에 그 시행본의 시행일이 아닌 날짜를 붙여도(refresh 없이) 그날 시행본으로 다시 고른다.
+            stored = service.get_legal_document(document_id="law-go:eflaw:000123", version_id="257973", effective_on="2025-12-31", article="제2조")
+            detail = transport.calls[-1]
+            self.assertEqual(detail["efYd"], "20240101")
+            self.assertNotEqual(stored.status, ResponseStatus.ERROR)
+            # 시행일 법령 문서를 날짜 없이 다시 받아도 그 시행본의 시행일을 쓴다.
+            again = service.get_legal_document(document_id="law-go:eflaw:000123", version_id="257973", article="제3조", refresh=True)
+            self.assertNotEqual(again.status, ResponseStatus.ERROR, again.error)
+            # 법령명을 document_id 자리에 넣어도 법령ID로 바꿔 시점 조회한다.
+            by_name = service.get_applicable_law(effective_on="2024-03-15", document_id="법인세법", refresh=True)
+            self.assertNotEqual(by_name.status, ResponseStatus.ERROR, by_name.error)
+            self.assertTrue(any("MST 257973" in warning for warning in by_name.warnings), by_name.warnings)
+            unknown = service.get_applicable_law(effective_on="2024-03-15", document_id="없는법")
+            self.assertEqual(unknown.error.code, ErrorCode.NOT_FOUND)
 
     def test_each_document_in_one_search_page_gets_its_own_content_hash(self):
         """검색 한 페이지에 여러 문서가 있을 때 raw_sha256이 문서별로 달라야 한다.
@@ -626,9 +694,11 @@ class LegalServiceTests(unittest.TestCase):
                 self.assertEqual(result.data["temporal_status"], "unresolved")
                 self.assertIn(f"lsiSeq={mst}", result.data["version_url"])
             document_id = "law-go:law:003608"
+            # 원문 열람은 막지 않고 오늘 시행 중인 버전을 연 뒤 다른 버전을 알린다(인용 검증은 아래처럼 엄격).
             ambiguous = service.get_legal_document(document_id=document_id)
-            self.assertEqual(ambiguous.error.code, ErrorCode.TEMPORAL_UNRESOLVED)
-            self.assertEqual(ambiguous.error.details["available_version_ids"], ["269543", "283635"])
+            self.assertNotEqual(ambiguous.status, ResponseStatus.ERROR)
+            self.assertIn(ambiguous.data["version_id"], {"269543", "283635"})
+            self.assertTrue(any("시행본이 여러 개" in warning and ("269543" in warning and "283635" in warning) for warning in ambiguous.warnings), ambiguous.warnings)
             older = service.get_legal_document(document_id=document_id, version_id="269543")
             self.assertIn("269543 버전", older.data["sections"][0]["text"])
             self.assertEqual(service.get_legal_document(document_id=document_id, version_id="missing").error.code, ErrorCode.NOT_FOUND)
@@ -741,6 +811,121 @@ class LegalServiceTests(unittest.TestCase):
                 self.assertEqual(service.repository.source_status()["documents"], 3)
                 self.assertEqual(service.repository.source_status()["snapshots"], 3)
                 self.assertEqual(transport.calls, [])
+
+    def test_refresh_during_outage_returns_the_stored_original_with_its_date(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service, transport = self.make_service(Path(directory))
+            first = service.get_legal_document(target="law", source_document_id="000123", refresh=True)
+            self.assertEqual(first.status, ResponseStatus.OK)
+
+            def down(url, *, params=None, secrets=()):
+                raise TransportError(ErrorCode.UPSTREAM_UNAVAILABLE, "공식 출처 연결 실패(timeout): TimeoutError")
+
+            transport.request = down
+            again = service.get_legal_document(document_id=first.data["document_id"], refresh=True, article="제1조")
+            self.assertEqual(again.status, ResponseStatus.OK)
+            self.assertEqual(again.data["sections"], first.data["sections"])
+            self.assertTrue(any(first.data["retrieved_at"] in warning for warning in again.warnings))
+            missing = service.get_legal_document(target="law", source_document_id="999999", refresh=True)
+            self.assertEqual(missing.error.code, ErrorCode.UPSTREAM_UNAVAILABLE)
+
+            def denied(url, *, params=None, secrets=()):
+                raise TransportError(ErrorCode.AUTH_FAILED, "인증 실패")
+
+            transport.request = denied
+            refused = service.get_legal_document(document_id=first.data["document_id"], refresh=True, article="제2조")
+            self.assertEqual(refused.error.code, ErrorCode.AUTH_FAILED)
+
+    def test_upstream_search_during_outage_falls_back_to_stored_index(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service, transport = self.make_service(Path(directory))
+            first = service.search_legal_sources(query="법인세법", target="law", provider="law.go.kr", upstream=True)
+            self.assertTrue(first.data["items"])
+
+            def down(url, *, params=None, secrets=()):
+                raise TransportError(ErrorCode.UPSTREAM_UNAVAILABLE, "공식 출처 연결 실패(timeout): TimeoutError")
+
+            transport.request = down
+            stored = service.search_legal_sources(query="법인세법", target="law", provider="law.go.kr", upstream=True, page=2)
+            self.assertEqual(stored.status, ResponseStatus.PARTIAL)
+            self.assertTrue(stored.data["items"])
+            self.assertIn("받아 둔 색인", stored.warnings[0])
+            nothing = service.search_legal_sources(query="존재하지않는검색어", target="law", provider="law.go.kr", upstream=True)
+            self.assertEqual(nothing.error.code, ErrorCode.UPSTREAM_UNAVAILABLE)
+
+    def test_search_and_detail_labels_of_one_edition_are_not_ambiguous(self):
+        from taxax.legal.repository import AmbiguousDocumentVersion
+
+        with tempfile.TemporaryDirectory() as directory:
+            service, _ = self.make_service(Path(directory))
+
+            def save(version, effective, completeness, index, promulgated=None, number=None):
+                run_id, at = f"run-{index}", f"2026-10-03T00:00:0{index}Z"
+                digest = hashlib.sha256(version.encode()).hexdigest()
+                service.repository.start_run(provider="law.go.kr", action="detail", request={"v": version}, started_at=at, run_id=run_id)
+                document = LegalDocument(
+                    provider="law.go.kr", document_type="law", source_document_id="003814", document_id="law-go:law:003814",
+                    version_id=version, title="상속세 및 증여세법 시행령", retrieved_at=at, raw_sha256=digest,
+                    snapshot_ref=f"v1/raw/{digest}.json", parser_version="fixture-v1", collection_run_id=run_id,
+                    effective_from=effective, promulgated_on=promulgated or effective, content_completeness=completeness,
+                    metadata={"공포번호": number} if number else {},
+                    sections=[TextSection(section_id="articles-1", kind="articles", locator="제54조", text="제54조(비상장주식등의 평가)")] if completeness == ContentCompleteness.COMPLETE else [],
+                )
+                service.repository.save_result(SourceSnapshot(
+                    snapshot_id=f"snap-{index}", provider="law.go.kr", source_document_id="003814", raw_sha256=digest,
+                    snapshot_ref=document.snapshot_ref, parser_version="fixture-v1", retrieved_at=at,
+                    retrieval_status=RetrievalStatus.SUCCESS, content_completeness=completeness, run_id=run_id, byte_length=1,
+                ), [document])
+
+            save("290845", "2026-10-01", ContentCompleteness.METADATA_ONLY, 1)
+            save("0038142026100136741", "2026-10-01", ContentCompleteness.COMPLETE, 2)
+            chosen = service.repository.get_document("law-go:law:003814")
+            self.assertEqual(chosen.version_id, "0038142026100136741")
+            save("281111", "2025-02-28", ContentCompleteness.COMPLETE, 3)
+            with self.assertRaises(AmbiguousDocumentVersion):
+                service.repository.get_document("law-go:law:003814")
+
+        # 분리시행 공포본: 검색은 마지막 시행일, 상세는 첫 시행일을 붙인다(법인세법 제21217호 실측).
+        with tempfile.TemporaryDirectory() as directory:
+            service, _ = self.make_service(Path(directory))
+            save("280349", "2026-07-01", ContentCompleteness.METADATA_ONLY, 1, "2025-12-23", "21217")
+            save("0015632025122321217", "2026-01-01", ContentCompleteness.COMPLETE, 2, "2025-12-23", "21217")
+            self.assertEqual(service.repository.get_document("law-go:law:003814").version_id, "0015632025122321217")
+            save("270000", "2025-01-01", ContentCompleteness.COMPLETE, 3, "2024-12-31", "20600")
+            with self.assertRaises(AmbiguousDocumentVersion):
+                service.repository.get_document("law-go:law:003814")
+
+    def test_provider_and_target_names_are_forgiving(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service, transport = self.make_service(Path(directory))
+            for target in ("precedent", "판례", "PREC"):
+                response = service.search_legal_sources(query="대손금", provider="법제처", target=target, upstream=True)
+                self.assertNotEqual(response.status, ResponseStatus.ERROR, target)
+                self.assertEqual(transport.calls[-1]["target"], "prec")
+            defaulted = service.search_legal_sources(query="법인세법", provider="law.go.kr", upstream=True)
+            self.assertEqual(transport.calls[-1]["target"], "law")
+            self.assertTrue(any("target이 없어" in warning for warning in defaulted.warnings))
+            unknown = service.search_legal_sources(query="법인세법", provider="law.go.kr", target="뉴스", upstream=True)
+            self.assertEqual(unknown.error.code, ErrorCode.INVALID_REQUEST)
+            self.assertIn("prec(판례)", unknown.error.message)
+
+    def test_missing_article_is_named_instead_of_asking_to_refresh_again(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service, _ = self.make_service(Path(directory))
+            result = service.get_legal_document(target="law", source_document_id="000123", refresh=True, article="제999조")
+            self.assertTrue(any("제999조 조문이 없습니다" in warning for warning in result.warnings), result.warnings)
+            self.assertFalse(any("refresh=true로 다시" in warning for warning in result.warnings))
+
+    def test_every_error_carries_a_next_step(self):
+        from taxax.legal.service import LegalKnowledgeService as Service
+
+        unapproved = ProviderError(ErrorCode.AUTH_FAILED, "HTTP 200 오류 (법제처 안내: 국가법령정보 공동활용 미신청된 목록/본문에 대한 접근입니다.)")
+        self.assertIn("open.law.go.kr", Service._error_response("r", unapproved, "law.go.kr").warnings[0])
+        for code in ErrorCode:
+            response = Service._error_response("r", ProviderError(code, "x"), "law.go.kr")
+            self.assertEqual(len(response.warnings), 1, code)
+        outage = Service._error_response("r", ProviderError(ErrorCode.UPSTREAM_UNAVAILABLE, "timeout"), "law.go.kr")
+        self.assertIn("없다는 증명이 아닙니다", outage.warnings[0])
 
     def test_incomplete_preview_citation_is_unverified(self):
         with tempfile.TemporaryDirectory() as directory:

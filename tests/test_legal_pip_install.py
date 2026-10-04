@@ -493,3 +493,21 @@ class PipInstallCommandTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WindowsClaudeDesktopConfigTests(unittest.TestCase):
+    def test_msix_install_uses_the_packaged_config_path(self):
+        """MSIX 설치본은 %APPDATA% 설정을 무시하므로 패키지 가상 경로에 등록해야 한다."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local, roaming = root / "Local", root / "Roaming"
+            self.assertEqual(
+                installer_module.windows_claude_desktop_config(local, roaming),
+                roaming / "Claude" / "claude_desktop_config.json",
+            )
+            packaged = local / "Packages" / "Claude_pzs8sxrjxfjjc" / "LocalCache" / "Roaming"
+            packaged.mkdir(parents=True)
+            self.assertEqual(
+                installer_module.windows_claude_desktop_config(local, roaming),
+                packaged / "Claude" / "claude_desktop_config.json",
+            )
